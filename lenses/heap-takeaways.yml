@@ -1,0 +1,138 @@
+# TAKEAWAYS: what a heap dump says, written from its evidence. A lens rather than a view because it
+# reads many views and then asks a model to write. Everything the model sees is gathered here, from
+# the realm's own views, by the same rules on any heap: jheapo's measured findings, and — for the
+# largest retainer the application's own jar compiled — the fields holding it and the source that
+# declares, creates and fills them. The prompt names no class, no library and no expected answer;
+# what the paragraph says comes from the evidence, or it is not said.
+#
+# The model is the world's `role` (default `summary`): define it in Settings → LLM roles, and point
+# it at whatever model this world should write with, a local one included. A role the world does
+# not define is reported, not quietly replaced.
+id: heap-takeaways
+name: Heap takeaways
+description: >-
+  About 200 words on what an analysed heap dump says: the key takeaways, what is good and what is
+  bad, and what to change in the code - written by a model from the measured findings and the
+  source behind them. "What should I fix in this heap", "summarise this heap dump".
+params:
+  - name: role
+    type: STRING
+    label: Model role (Settings → LLM roles)
+    required: false
+spec:
+  kind: cypherscript
+  script: |
+    const role = String(lensArgs.role || "summary");
+    const run = async (name, params) => {
+      try {
+        const r = await gateway.view.run({ name, params: JSON.stringify(params || {}) });
+        return (r && r.rows) || [];
+      } catch (e) { return []; }
+    };
+    /* Timestamps reach the model as ISO date-times, never epoch numbers: data presented, not interpreted. */
+    const dated = (o) => {
+      if (Array.isArray(o)) return o.map(dated);
+      if (o && typeof o === "object") {
+        const out = {};
+        Object.keys(o).forEach(k => {
+          const v = o[k];
+          out[k] = /timestamp$|At$|Time$/i.test(k) && typeof v === "number" && v > 1e11 ? new Date(v).toISOString() : dated(v);
+        });
+        return out;
+      }
+      return o;
+    };
+    const clip = (s, n) => (s == null ? s : String(s).length > n ? String(s).slice(0, n) + " …" : String(s));
+    const keep = (rows, n, cols) => rows.slice(0, n).map(r => {
+      const o = {}; (cols || Object.keys(r)).forEach(k => { if (r[k] !== null && r[k] !== undefined && r[k] !== "") o[k] = typeof r[k] === "string" ? clip(r[k], 1200) : r[k]; });
+      return o;
+    });
+
+    // ── Measurements, the same on any heap ──
+    const [overview, retainers, waste, idle, humongous, dupStrings, stringHolders, nested, statics,
+           listeners, idKeys, threadLocals, blocked, inYourCode, loaders, finalization, entangled, yourDominators] =
+      await Promise.all([
+        run("HeapOverviewTotals"), run("HeapAppRetainers"), run("HeapFindingsWaste"), run("HeapFindingsIdleCollections"),
+        run("HeapFindingsHumongous"), run("HeapFindingsDuplicateStrings"), run("HeapFindingsStringHolders"),
+        run("HeapFindingsNestedCollections"), run("HeapFindingsStaticPins"), run("HeapFindingsListenerLeaks"),
+        run("HeapFindingsIdentityKeys"), run("HeapFindingsThreadLocalRetention"), run("HeapFindingsBlockedThreads"),
+        run("HeapFindingsStacksInYourCode"), run("HeapFindingsClassLoaders"), run("HeapFindingsFinalization"),
+        run("HeapFindingsEntanglement"), run("HeapFindingsYourDominators"),
+      ]);
+
+    // ── The source behind the largest retainer the application compiled ──
+    const subject = retainers.filter(r => r.inApp)[0] || null;
+    let holders = [], fields = [], classSource = [];
+    if (subject) {
+      holders = await run("HeapAppClassHolders", { classId: subject.classId });
+      const owned = holders.filter(h => h.inApp && h.field).slice(0, 3);
+      fields = await Promise.all(owned.map(async h => ({
+        field: h.field,
+        heldObjectsInSample: h.objects,
+        accesses: keep(await run("HeapAppFieldCode", { field: h.field }), 8, ["declaredAs", "isStatic", "isFinal", "container", "method", "access", "lines", "code"]),
+        additions: keep(await run("HeapAppFieldGrowth", { field: h.field }), 8),
+      })));
+      classSource = keep((await run("HeapAppClassSource", { className: subject.className }))
+        .filter(d => d.kind === "constructor" || d.kind === "field" || d.kind === "class"), 20,
+        ["source", "kind", "name", "signature", "fromLine", "toLine", "javadoc", "code"]);
+    }
+
+    const evidence = {
+      heap: overview[0] || {},
+      largestRetainersReported: keep(retainers, 10),
+      wasteMeasured: keep(waste, 10),
+      idleCollections: keep(idle, 10),
+      humongousArrays: keep(humongous, 5),
+      duplicateStrings: keep(dupStrings, 5),
+      stringHolders: keep(stringHolders, 5),
+      nestedCollections: keep(nested, 6),
+      retainedViaStaticFields: keep(statics, 5),
+      retainedViaListenerLikeFields: keep(listeners, 5),
+      identityHashedMapKeys: keep(idKeys, 5),
+      retainedViaThreadLocals: keep(threadLocals, 5),
+      blockedOrWaitingThreads: { count: blocked.length, inApplicationCode: keep(blocked.filter(b => b.code), 5) },
+      threadsExecutingApplicationCode: keep(inYourCode, 5),
+      classLoaders: keep(loaders, 5),
+      finalization: finalization[0] || {},
+      entanglement: keep(entangled, 3),
+      largeRetainersReachedThroughApplicationCode: keep(yourDominators, 5),
+      applicationRetainer: subject ? {
+        className: subject.className, instances: subject.instances, retainedBytes: subject.retainedBytes,
+        hashCodeFrom: subject.hashCodeFrom,
+        holdersInSample: keep(holders, 8),
+        holdingFields: fields,
+        classDeclarations: classSource,
+      } : null,
+    };
+
+    const prompt = [
+      "Below is the evidence from an analysis of one Java heap dump, as JSON: measurements made by a heap analyser,",
+      "and, where the measurements lead into the application's own code, the declarations and source lines involved",
+      "(the fields holding the application's largest retainer, and the code that declares, creates and adds to them).",
+      "Byte figures are bytes.",
+      "",
+      "Write ONE paragraph of about 200 words for the developers of this application, in plain prose with no headings or lists:",
+      "the key takeaways, what is good, what is bad, and what should change in the code.",
+      "Rules: state only what the evidence supports; quote figures as they appear (you may convert bytes to KB/MB);",
+      "name classes, fields, files and line numbers exactly as the evidence gives them; when you recommend a change,",
+      "tie it to the specific source lines that motivate it; if the evidence shows no problem in an area, you may say so;",
+      "if it does not support a recommendation, do not make one.",
+      "",
+      "Before writing, activate the heap-report skill and follow it for how to write and format the paragraph:",
+      "its order, units, dates and how to cite code.",
+      "",
+      "EVIDENCE:",
+      JSON.stringify(dated(evidence)),
+    ].join("\n");
+
+    const out = { kind: "heap-takeaways", role, text: null, error: null, evidenceChars: prompt.length,
+                  sources: { views: 18 + (subject ? 3 + fields.length * 2 : 0), applicationRetainer: subject ? subject.className : null,
+                             fields: fields.map(f => f.field) } };
+    try {
+      out.text = String(await gateway.ai.complete({ prompt, role, skills: ["heap-report"] })).trim();
+    } catch (e) {
+      out.error = "The model for role '" + role + "' could not answer: " + String(e && e.message || e).slice(0, 400) +
+        " Define the role in Settings → LLM roles, pointing at a model this world can reach.";
+    }
+    await gateway.lens.present({ content: JSON.stringify(out) });
+    return out;

@@ -1,0 +1,163 @@
+# Every producer calls jheapo's REST interface (apis/jheapo.yaml) when a query reaches it. Nothing
+# is stored. jheapo serves ONE analysed dump, so the Heap anchor's name selects nothing: it is the
+# handle a query starts from, `(h:Heap {name: 'current'})`, echoed onto every whole-heap row.
+#
+# The walks are BATCHED: jheapo's /batch routes take up to 100 keys per call and tag each row with
+# `forKey`, the key it answers, so a hop over 300 objects is 3 requests, not 300. Class and package
+# filters are PUSHED DOWN: `{className: …}` and `{packageName: …}` in a MATCH (or `IN [...]`) reach
+# jheapo as request parameters, and rows that do not match never leave it.
+#
+# HARDCODED FOR NOW: every row also carries the key of its counterpart in realm-java-code for ONE
+# jar, jheapo's own (jars/jheapo-0.1.0-SNAPSHOT.jar under the world's data/), so a heap row reaches
+# its JavaType or JavaField by a keyed join that fetches exactly that type or field. Point a heap at
+# another application by changing that path below.
+
+# ── Whole heap, from the Heap anchor ────────────────────────────────────────────────────────────
+
+- name: heapOverview
+  kind: remote
+  operation: getTab
+  keyArgs: [heap]                  # jheapo serves one dump; an undeclared argument is not sent
+  args: { tab: overview }
+  echoKeyAs: heapKey
+  records: "$"
+  pushdown: []
+  project:
+    heapBytes: heapBytes
+    classes: classes
+    instances: instances
+    classLoaders: classLoaders
+    gcRootCount: gcRootCount
+    duplicateStringWaste: duplicateStringWaste
+    duplicateStringGroups: duplicateStringGroups
+    pendingFinalization: pendingFinalization
+    dumpTimestamp: dumpTimestamp
+
+- name: heapRetainedClasses
+  kind: remote
+  operation: topRetained
+  keyArgs: [heap]
+  args: { n: 500 }
+  echoKeyAs: heapKey
+  records: "$[*]"
+  pushdown:
+    - { property: className,   op: EQUALS, argPath: className, clause: ["{value}"] }
+    - { property: className,   op: IN,     argPath: className, clause: "{values}" }
+    - { property: packageName, op: EQUALS, argPath: package,   clause: ["{value}"] }
+    - { property: packageName, op: IN,     argPath: package,   clause: "{values}" }
+  compute:
+    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.className"
+
+
+- name: heapHistogramClasses
+  kind: remote
+  operation: getTab
+  keyArgs: [heap]
+  args: { tab: histogram }
+  echoKeyAs: heapKey
+  records: "$.rows[*]"
+  pushdown: []
+  compute:
+    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.className"
+
+
+- name: heapLeakSuspects
+  kind: remote
+  operation: leakSuspects
+  keyArgs: [heap]
+  args: { n: 50 }
+  echoKeyAs: heapKey
+  records: "$[*]"
+  pushdown:
+    - { property: className,   op: EQUALS, argPath: className, clause: ["{value}"] }
+    - { property: className,   op: IN,     argPath: className, clause: "{values}" }
+    - { property: packageName, op: EQUALS, argPath: package,   clause: ["{value}"] }
+    - { property: packageName, op: IN,     argPath: package,   clause: "{values}" }
+  compute:
+    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.className"
+
+
+- name: heapDominators
+  kind: remote
+  operation: dominatorChildren
+  keyArgs: [heap]
+  args: { n: 100 }
+  echoKeyAs: heapKey
+  records: "$[*]"
+  pushdown:
+    - { property: className,   op: EQUALS, argPath: className, clause: ["{value}"] }
+    - { property: className,   op: IN,     argPath: className, clause: "{values}" }
+    - { property: packageName, op: EQUALS, argPath: package,   clause: ["{value}"] }
+    - { property: packageName, op: IN,     argPath: package,   clause: "{values}" }
+
+# ── Walks, batched by key ───────────────────────────────────────────────────────────────────────
+  compute:
+    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.className"
+
+
+- name: classInstances
+  kind: remote
+  operation: batchInstances
+  keyArg: classIds
+  maxKeysPerCall: 100
+  args: { n: 25 }
+  records: "$[*]"
+  pushdown:
+    - { property: className,   op: EQUALS, argPath: className, clause: ["{value}"] }
+    - { property: className,   op: IN,     argPath: className, clause: "{values}" }
+    - { property: packageName, op: EQUALS, argPath: package,   clause: ["{value}"] }
+    - { property: packageName, op: IN,     argPath: package,   clause: "{values}" }
+  compute:
+    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.className"
+
+
+- name: objectHolders
+  kind: remote
+  operation: batchHolders
+  keyArg: oids
+  maxKeysPerCall: 100
+  records: "$[*]"
+  pushdown:
+    - { property: className,   op: EQUALS, argPath: className, clause: ["{value}"] }
+    - { property: className,   op: IN,     argPath: className, clause: "{values}" }
+    - { property: packageName, op: EQUALS, argPath: package,   clause: ["{value}"] }
+    - { property: packageName, op: IN,     argPath: package,   clause: "{values}" }
+  compute:
+    javaFieldId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + head([t IN r.through WHERE NOT t STARTS WITH '['])"
+    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.className"
+    id: "r.forKey + '<' + r.oid"
+    field: "head([t IN r.through WHERE NOT t STARTS WITH '['])"
+
+- name: objectFields
+  kind: remote
+  operation: batchFields
+  keyArg: oids
+  maxKeysPerCall: 100
+  records: "$[*]"
+  pushdown:
+    - { property: className,   op: EQUALS, argPath: className, clause: ["{value}"] }
+    - { property: className,   op: IN,     argPath: className, clause: "{values}" }
+    - { property: packageName, op: EQUALS, argPath: package,   clause: ["{value}"] }
+    - { property: packageName, op: IN,     argPath: package,   clause: "{values}" }
+    - { property: heldBy,      op: EQUALS, argPath: field,     clause: ["{value}"] }
+    - { property: heldBy,      op: IN,     argPath: field,     clause: "{values}" }
+  compute:
+    javaFieldId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.heldBy"
+    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.className"
+    id: "r.forKey + '.' + r.heldBy + '>' + r.oid"
+
+- name: objectPaths
+  kind: remote
+  operation: batchPaths
+  keyArg: oids
+  maxKeysPerCall: 100
+  records: "$[*]"
+  pushdown: []
+  compute:
+    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.className"
+    id: "r.forKey + '#' + toString(r.step)"
+
+# ── Into realm-java-code's jar, by key (the jar is hardcoded above) ─────────────────────────────
+
+- { name: heapJavaTypeByName, kind: jar, emit: types,  by: name }
+- { name: heapJavaFieldByKey, kind: jar, emit: fields, by: key }

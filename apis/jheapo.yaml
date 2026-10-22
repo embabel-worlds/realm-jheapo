@@ -1,0 +1,543 @@
+openapi: 3.0.3
+info:
+  title: jheapo REST
+  version: '1.0'
+  description: 'One analysed Java heap dump, served by jheapo''s RestBrowserMain (docs/rest-api.md in jheapo). Tabs
+    are the analysis panels (overview, histogram, retention, waste, strings, threads, ...); drill-downs walk the
+    heap: a class''s instances, an object''s holders, referrers, fields and its chain to a GC root, the retained
+    classes, leak suspects and the dominator tree. Drill-downs need a licensed jheapo (403 without). Ids are decimal
+    strings as answered, or hex with 0x.'
+servers:
+- url: http://host.docker.internal:7071/rest/v1
+paths:
+  /status:
+    get:
+      operationId: getStatus
+      summary: Where the analysis is; `done` is true once every tab has landed.
+      responses:
+        '200':
+          description: Status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+  /tabs:
+    get:
+      operationId: listTabs
+      summary: Every analysis tab and whether it has landed, and whether the heap is licensed.
+      responses:
+        '200':
+          description: Tabs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tabs'
+  /tabs/{tab}:
+    get:
+      operationId: getTab
+      summary: One tab's rendering, as the page shows it. `histogram` lists the top classes with their classId (the
+        id instances are listed by); `overview` has the heap's totals, the dump reason and the top suspect; `retention`
+        what holds the heap.
+      parameters:
+      - name: tab
+        in: path
+        required: true
+        schema:
+          type: string
+          enum:
+          - start
+          - overview
+          - retention
+          - retained
+          - histogram
+          - waste
+          - strings
+          - collections
+          - collectionsOfCollections
+          - humongous
+          - filler
+          - native
+          - finalization
+          - classloaderDetail
+          - threads
+          - entanglement
+          - classCoupling
+          - duplicateClasses
+          - inheritanceDepth
+      responses:
+        '200':
+          description: The tab's rendering
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          $ref: '#/components/responses/Error'
+  /retained:
+    get:
+      operationId: topRetained
+      summary: The classes retaining the most bytes.
+      parameters:
+      - $ref: '#/components/parameters/n'
+      - &id001
+        $ref: '#/components/parameters/className'
+      - &id002
+        $ref: '#/components/parameters/package'
+      - &id003
+        $ref: '#/components/parameters/classPrefix'
+      responses:
+        '200':
+          description: Classes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RetainedClass'
+        '403':
+          $ref: '#/components/responses/Error'
+  /histogram/retained:
+    get:
+      operationId: histogramRetained
+      summary: The histogram's classes with retained bytes (-1 where none is known).
+      parameters:
+      - $ref: '#/components/parameters/n'
+      responses:
+        '200':
+          description: Classes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RetainedClass'
+        '403':
+          $ref: '#/components/responses/Error'
+  /leak-suspects:
+    get:
+      operationId: leakSuspects
+      summary: The objects retaining the most, as leak suspects, with retained size.
+      parameters:
+      - $ref: '#/components/parameters/n'
+      - *id001
+      - *id002
+      - *id003
+      responses:
+        '200':
+          description: Objects
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeapObjects'
+        '403':
+          $ref: '#/components/responses/Error'
+  /dominators:
+    get:
+      operationId: dominatorChildren
+      summary: A node's children in the dominator tree, largest retained first; no parentRank is the root.
+      parameters:
+      - name: parentRank
+        in: query
+        schema:
+          type: integer
+          default: -1
+        description: The rank of the parent node, as a previous answer gave it.
+      - $ref: '#/components/parameters/n'
+      - *id001
+      - *id002
+      - *id003
+      responses:
+        '200':
+          description: Objects
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeapObjects'
+        '403':
+          $ref: '#/components/responses/Error'
+  /classes/{classId}/instances:
+    get:
+      operationId: classInstances
+      summary: A page of one class's instances, by the classId a tab or answer gave.
+      parameters:
+      - $ref: '#/components/parameters/classId'
+      - $ref: '#/components/parameters/n'
+      - name: from
+        in: query
+        schema:
+          type: integer
+          default: 0
+          minimum: 0
+      responses:
+        '200':
+          description: Instances
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeapObjects'
+        '400':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /objects/{oid}/holders:
+    get:
+      operationId: objectHolders
+      summary: Who holds the object, one row per holder, with the fields or slots it is held `through`.
+      parameters:
+      - $ref: '#/components/parameters/oid'
+      responses:
+        '200':
+          description: Holders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeapObjects'
+        '400':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /objects/{oid}/referrers:
+    get:
+      operationId: objectReferrers
+      summary: One row per reference to the object.
+      parameters:
+      - $ref: '#/components/parameters/oid'
+      responses:
+        '200':
+          description: Referrers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeapObjects'
+        '403':
+          $ref: '#/components/responses/Error'
+  /objects/{oid}/fields:
+    get:
+      operationId: objectFields
+      summary: The objects the object's fields hold; `heldBy` names the field (`Owner.field`).
+      parameters:
+      - $ref: '#/components/parameters/oid'
+      responses:
+        '200':
+          description: Fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeapObjects'
+        '403':
+          $ref: '#/components/responses/Error'
+  /objects/{oid}/chain:
+    get:
+      operationId: chainToRoot
+      summary: The object's chain to its nearest GC root, root first; an array of chains.
+      parameters:
+      - $ref: '#/components/parameters/oid'
+      responses:
+        '200':
+          description: Chains
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HeapObjects'
+        '403':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+  /strings:
+    get:
+      operationId: scanStrings
+      summary: Copies of a string value in the heap.
+      parameters:
+      - name: value
+        in: query
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/n'
+      responses:
+        '200':
+          description: Copies
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/Error'
+  /objects/{oid}/path:
+    get:
+      operationId: objectPath
+      summary: The object's first chain to a GC root, flat, each object with its step from the root (0).
+      parameters:
+      - $ref: '#/components/parameters/oid'
+      responses:
+        '200': &id005
+          description: Rows, each with forKey and packageName
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeapObjects'
+        '403': &id004
+          $ref: '#/components/responses/Error'
+        '500': *id004
+  /batch/instances:
+    get:
+      operationId: batchInstances
+      summary: Instances of many classes in one call; each row carries forKey, the class id it answers.
+      parameters:
+      - $ref: '#/components/parameters/classIds'
+      - $ref: '#/components/parameters/n'
+      - name: from
+        in: query
+        schema:
+          type: integer
+          default: 0
+      - *id001
+      - *id002
+      - *id003
+      responses:
+        '200': *id005
+        '400': *id004
+        '403': *id004
+        '500': *id004
+  /batch/holders:
+    get:
+      operationId: batchHolders
+      summary: Who holds each of many objects; each row is a holder, with `through` the fields (Owner.field) or
+        slots it holds it by, and forKey the object held.
+      parameters:
+      - $ref: '#/components/parameters/oids'
+      - *id001
+      - *id002
+      - *id003
+      responses:
+        '200': *id005
+        '400': *id004
+        '403': *id004
+        '500': *id004
+  /batch/fields:
+    get:
+      operationId: batchFields
+      summary: What the fields of each of many objects hold; each row is the held object, heldBy its field (Owner.field),
+        forKey the owner.
+      parameters:
+      - $ref: '#/components/parameters/oids'
+      - $ref: '#/components/parameters/field'
+      - *id001
+      - *id002
+      - *id003
+      responses:
+        '200': *id005
+        '400': *id004
+        '403': *id004
+        '500': *id004
+  /batch/paths:
+    get:
+      operationId: batchPaths
+      summary: The path to a GC root of each of many objects; each row a step, numbered from the root, forKey the
+        object.
+      parameters:
+      - $ref: '#/components/parameters/oids'
+      responses:
+        '200': *id005
+        '400': *id004
+        '403': *id004
+        '500': *id004
+  /batch/frames:
+    get:
+      operationId: batchFrames
+      summary: Each thread's stack, flat and innermost first; each frame's label read into className, method, file,
+        line and sourcePath, forKey the thread oid.
+      parameters:
+      - $ref: '#/components/parameters/oids'
+      - $ref: '#/components/parameters/className'
+      - $ref: '#/components/parameters/package'
+      responses:
+        '200':
+          description: Frames
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '404':
+          $ref: '#/components/responses/Error'
+components:
+  parameters:
+    n:
+      name: n
+      in: query
+      description: Rows to return, 1 to 500.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+    oid:
+      name: oid
+      in: path
+      required: true
+      description: An object id, decimal as answers give it, or hex with 0x.
+      schema:
+        type: string
+    classId:
+      name: classId
+      in: path
+      required: true
+      description: A class id, as the histogram tab or an answer gives it.
+      schema:
+        type: string
+    oids:
+      name: oids
+      in: query
+      required: true
+      description: 'Object ids, up to 100: each is walked, and each row carries forKey, the id it answers.'
+      style: form
+      explode: false
+      schema:
+        type: array
+        items:
+          type: string
+    classIds:
+      name: classIds
+      in: query
+      required: true
+      description: 'Class ids, up to 100: each is walked, and each row carries forKey, the id it answers.'
+      style: form
+      explode: false
+      schema:
+        type: array
+        items:
+          type: string
+    className:
+      name: className
+      in: query
+      required: false
+      description: Keep only rows of these classes (binary names), applied server-side.
+      style: form
+      explode: false
+      schema:
+        type: array
+        items:
+          type: string
+    package:
+      name: package
+      in: query
+      required: false
+      description: Keep only rows whose packageName is one of these, applied server-side.
+      style: form
+      explode: false
+      schema:
+        type: array
+        items:
+          type: string
+    classPrefix:
+      name: classPrefix
+      in: query
+      description: Keep only rows whose class name starts with this.
+      schema:
+        type: string
+    field:
+      name: field
+      in: query
+      required: false
+      description: Keep only fields held by one of these, as Owner.field.
+      style: form
+      explode: false
+      schema:
+        type: array
+        items:
+          type: string
+  responses:
+    Error:
+      description: Refused, with the reason
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Status:
+      type: object
+      properties:
+        phase:
+          type: string
+        elapsed:
+          type: integer
+          description: Milliseconds since the run began.
+        done:
+          type: boolean
+    Tabs:
+      type: object
+      properties:
+        licensed:
+          type: boolean
+        tabs:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              landed:
+                type: boolean
+    HeapObject:
+      type: object
+      properties:
+        oid:
+          type: string
+          description: The object's id, decimal.
+        className:
+          type: string
+          description: The object's class, binary name (arrays as T[]).
+        classId:
+          description: The class id when known; 0 when the answer does not say.
+        rank:
+          type: integer
+          description: Dominator-tree rank; -1 outside the tree.
+        shallowSize:
+          type: integer
+          description: Shallow bytes; 0 or -1 when not read.
+        retainedSize:
+          type: integer
+          description: Retained bytes; -1 when not known.
+        heldBy:
+          type: string
+          description: The field holding it, `Owner.field`, in a fields answer.
+        through:
+          type: array
+          items:
+            type: string
+          description: The fields or slots a holder holds it through.
+        forKey:
+          type: string
+          description: 'In a batch: the key this row answers.'
+        packageName:
+          type: string
+          description: The class's package.
+        step:
+          type: integer
+          description: 'In a path: the step from the root, 0 first.'
+    HeapObjects:
+      type: array
+      items:
+        $ref: '#/components/schemas/HeapObject'
+    RetainedClass:
+      type: object
+      properties:
+        classId:
+          description: The class id.
+        className:
+          type: string
+        instances:
+          type: integer
+        retainedBytes:
+          type: integer
+          description: -1 where not known.
+        packageName:
+          type: string
+    Error:
+      type: object
+      properties:
+        error:
+          description: The reason, a string or {kind, message} for a failed walk.

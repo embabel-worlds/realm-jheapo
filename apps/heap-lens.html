@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Heap Lens</title>
+<meta name="application-name" content="Heap Lens">
+<meta name="description" content="A Java heap dump, read by jheapo, walked to the code that holds it: every retainer, holder and path to a GC root, carried through the application's jar into its source.">
+<link rel="stylesheet" href="/api/v1/apps-runtime/v1/theme.css">
+<script src="/api/v1/apps-runtime/v1/embabel.js"></script>
+<script src="/api/v1/apps-runtime/gateway.js"></script>
+<script type="application/embabel-app+json">
+{
+  "version": 1,
+  "name": "heap-lens",
+  "title": "Heap Lens",
+  "requires": {
+    "lenses": ["heap-takeaways"],
+    "views": [
+      "HeapOverviewTotals", "HeapAppRetainers", "HeapAppHistogram", "HeapAppLeakSuspects",
+      "HeapAppInstances", "HeapAppClassHolders", "HeapAppHolders", "HeapAppFields", "HeapAppPath",
+      "HeapAppFieldCode", "HeapAppFieldGrowth", "HeapAppClassSource",
+      "HeapFindingsWaste", "HeapFindingsDuplicateStrings", "HeapFindingsStringHolders", "HeapFindingsIdleCollections",
+      "HeapFindingsNestedCollections", "HeapFindingsThreads", "HeapFindingsBlockedThreads", "HeapFindingsStacksInYourCode",
+      "HeapFindingsThreadLocalRetention", "HeapFindingsStaticPins", "HeapFindingsListenerLeaks", "HeapFindingsIdentityKeys",
+      "HeapFindingsClassLoaders", "HeapFindingsHumongous", "HeapFindingsEntanglement", "HeapFindingsFinalization",
+      "HeapFindingsYourDominators"
+    ]
+  }
+}
+</script>
+<style>
+  :root {
+    --bg: #0b0d12; --panel: #11141b; --panel2: #161a23; --line: #232838; --text: #e6e8ee; --dim: #8b93a7;
+    --faint: #5b6378; --accent: #63c0f5; --app: #f5b041; --appbg: rgba(245,176,65,.10); --bad: #ff6b6b;
+    --good: #4fd18b; --violet: #b18cff; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }
+  button { font: inherit; color: inherit; }
+  code, .mono { font-family: var(--mono); font-size: 12px; }
+  .top { display: flex; align-items: center; gap: 18px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, #121722, var(--bg)); }
+  .brand { font-weight: 700; letter-spacing: .2px; font-size: 15px; white-space: nowrap; }
+  .brand span { color: var(--accent); }
+  .tiles { display: flex; gap: 10px; flex-wrap: wrap; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; min-width: 96px; }
+  .tile b { display: block; font-size: 15px; }
+  .tile small { color: var(--dim); font-size: 11px; }
+  .grid { display: grid; grid-template-columns: minmax(300px, 25%) minmax(380px, 1fr) minmax(380px, 38%); height: calc(100% - 62px - 26px); }
+  .col { overflow: auto; border-right: 1px solid var(--line); min-width: 0; }
+  .col:last-child { border-right: 0; background: var(--panel); }
+  .head { position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--line); padding: 10px 12px 8px; }
+  .col:last-child .head { background: var(--panel); }
+  .head h2 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--dim); }
+  .tabs { display: flex; gap: 4px; }
+  .tabs button { background: none; border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px; cursor: pointer; color: var(--dim); }
+  .tabs button.on { color: var(--text); border-color: var(--accent); background: rgba(99,192,245,.08); }
+  .toggle { display: flex; align-items: center; gap: 6px; color: var(--dim); margin-top: 8px; cursor: pointer; user-select: none; }
+  .row { padding: 7px 12px; border-bottom: 1px solid #171b26; cursor: pointer; position: relative; }
+  .row:hover { background: var(--panel2); }
+  .row.sel { background: rgba(99,192,245,.08); box-shadow: inset 3px 0 0 var(--accent); }
+  .cls { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+  .cls .pkg { color: var(--faint); }
+  .meta { color: var(--dim); font-size: 11.5px; display: flex; gap: 10px; margin-top: 3px; flex-wrap: wrap; }
+  .bar { height: 3px; background: var(--line); border-radius: 2px; margin-top: 5px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent); }
+  .app .bar i { background: var(--app); }
+  .badge { display: inline-block; font-size: 10px; padding: 0 6px; border-radius: 9px; border: 1px solid; vertical-align: 1px; margin-left: 6px; font-family: system-ui; }
+  .badge.app { color: var(--app); border-color: rgba(245,176,65,.5); }
+  .badge.id { color: var(--bad); border-color: rgba(255,107,107,.5); }
+  .badge.jdk { color: var(--faint); border-color: var(--line); }
+  .pad { padding: 12px; }
+  .muted { color: var(--dim); }
+  .empty { color: var(--dim); padding: 18px 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin: 12px; overflow: hidden; }
+  .card > h3 { margin: 0; padding: 9px 12px; font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .card > h3 .act { text-transform: none; letter-spacing: 0; }
+  .diag { border-color: rgba(245,176,65,.45); box-shadow: 0 0 0 1px rgba(245,176,65,.15), 0 8px 30px rgba(0,0,0,.35); }
+  .diag > h3 { color: var(--app); }
+  .verdict { padding: 12px; font-size: 14px; line-height: 1.5; }
+  .verdict b { color: var(--app); font-weight: 600; }
+  .hop { display: grid; grid-template-columns: 22px 1fr; gap: 6px; padding: 6px 12px; border-top: 1px solid #1a1f2c; }
+  .hop .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--faint); margin: 4px 0 0 5px; }
+  .hop.app .dot { background: var(--app); box-shadow: 0 0 8px var(--app); }
+  .hop.root .dot { background: var(--violet); }
+  .field { font-family: var(--mono); font-size: 11.5px; color: var(--accent); cursor: pointer; text-decoration: underline dotted; }
+  .link { color: var(--accent); cursor: pointer; }
+  .btn { background: rgba(99,192,245,.1); border: 1px solid rgba(99,192,245,.4); border-radius: 6px; padding: 3px 10px; cursor: pointer; color: var(--accent); }
+  .btn.hot { background: rgba(245,176,65,.12); border-color: rgba(245,176,65,.55); color: var(--app); }
+  .crumbs { padding: 8px 12px; color: var(--dim); font-size: 12px; border-bottom: 1px solid var(--line); display: flex; gap: 6px; flex-wrap: wrap; }
+  .crumbs a { color: var(--accent); cursor: pointer; text-decoration: none; }
+  .oids { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px; }
+  .oid { font-family: var(--mono); font-size: 11px; padding: 2px 7px; border: 1px solid var(--line); border-radius: 5px; cursor: pointer; color: var(--dim); }
+  .oid:hover, .oid.sel { color: var(--text); border-color: var(--accent); }
+  .collapsed { color: var(--faint); font-size: 11.5px; padding: 4px 12px 4px 40px; cursor: pointer; }
+  pre.code { margin: 0; padding: 8px 0; font: 11.5px/1.55 var(--mono); overflow: auto; background: #0d1017; border-top: 1px solid var(--line); }
+  pre.code .ln { display: block; padding: 0 12px; white-space: pre; }
+  pre.code .ln.hit { background: rgba(245,176,65,.13); box-shadow: inset 3px 0 0 var(--app); }
+  pre.code .n { color: var(--faint); display: inline-block; min-width: 38px; user-select: none; }
+  .kw { color: #c792ea; } .str { color: #c3e88d; } .com { color: #6b7394; font-style: italic; } .num { color: #f78c6c; }
+  .src-h { padding: 8px 12px; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; border-top: 1px solid var(--line); }
+  .src-h .mono { color: var(--text); }
+  .decl { border-top: 1px solid #1a1f2c; }
+  .decl summary { padding: 6px 12px; cursor: pointer; list-style: none; display: flex; gap: 8px; align-items: baseline; }
+  .decl summary::-webkit-details-marker { display: none; }
+  .decl summary .k { font-size: 10px; color: var(--violet); min-width: 64px; text-transform: uppercase; letter-spacing: .6px; }
+  .decl summary .s { font-family: var(--mono); font-size: 11.5px; word-break: break-all; }
+  .decl summary .l { margin-left: auto; color: var(--faint); font-size: 11px; white-space: nowrap; }
+  .doc { color: var(--dim); padding: 0 12px 6px 84px; font-size: 12px; }
+  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 3px 10px; padding: 10px 12px; font-size: 12px; }
+  .kv div:nth-child(odd) { color: var(--dim); }
+  .warn { margin: 10px 12px; padding: 8px 10px; border: 1px solid rgba(255,107,107,.35); border-radius: 8px; color: #ffb3b3; font-size: 12px; }
+  .spin { display: inline-block; width: 11px; height: 11px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: s .8s linear infinite; vertical-align: -1px; margin-right: 6px; }
+  @keyframes s { to { transform: rotate(360deg); } }
+  .kbd { font-family: var(--mono); font-size: 10.5px; color: var(--faint); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+  .take { border-color: rgba(99,192,245,.45); }
+  .take > h3 { color: var(--accent); }
+  .take .verdict { font-size: 14.5px; line-height: 1.65; }
+  .take .verdict code { color: var(--app); background: rgba(245,176,65,.08); padding: 0 3px; border-radius: 3px; }
+  .take .pending { padding: 12px; font-size: 13px; line-height: 1.6; }
+  .take .why { padding: 0 12px 10px; color: var(--faint); font-size: 11.5px; }
+  .finding .n { margin-left: auto; font-size: 11px; padding: 0 7px; border-radius: 9px; border: 1px solid var(--line); color: var(--dim); }
+  .finding .n.hit { color: var(--app); border-color: rgba(245,176,65,.5); }
+  .finding .n.ok { color: var(--good); border-color: rgba(79,209,139,.4); }
+  table.t { border-collapse: collapse; width: 100%; font-size: 12px; }
+  table.t th { text-align: left; color: var(--dim); font-weight: 500; padding: 6px 10px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
+  table.t td { padding: 6px 10px; border-bottom: 1px solid #1a1f2c; vertical-align: top; font-family: var(--mono); font-size: 11.5px; word-break: break-word; }
+  table.t td pre { margin: 0; white-space: pre-wrap; color: var(--dim); }
+  @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; height: auto; } .col { border-right: 0; border-bottom: 1px solid var(--line); max-height: none; } }
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="brand">Heap <span>Lens</span></div>
+  <button class="btn" id="takeBtn" title="What matters, and what to change">Takeaways</button>
+  <div class="tiles" id="tiles"><div class="muted"><span class="spin"></span>Reading the heap…</div></div>
+</div>
+<div class="grid">
+  <section class="col" id="left">
+    <div class="head">
+      <h2>Where the memory is</h2>
+      <div class="tabs" id="tabs">
+        <button data-t="retainers" class="on">Retainers</button>
+        <button data-t="histogram">Histogram</button>
+        <button data-t="suspects">Leak suspects</button>
+        <button data-t="findings">Findings</button>
+      </div>
+      <label class="toggle"><input type="checkbox" id="mine"> Your code only <span class="kbd">m</span></label>
+    </div>
+    <div id="list"></div>
+  </section>
+  <section class="col" id="mid">
+    <div class="head"><h2>Investigation</h2><div class="crumbs" id="crumbs" style="padding:0;border:0">Pick a class or a suspect.</div></div>
+    <div id="work"><div class="empty">Choose what to investigate on the left. Heap Lens walks from the heap to your code: who holds it, by which field, and the line that put it there.</div></div>
+  </section>
+  <section class="col" id="right">
+    <div class="head"><h2>Code</h2><div class="muted" id="codeTitle">Click a field or a class to read its code.</div></div>
+    <div id="code"></div>
+  </section>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var state = { tab: 'retainers', mine: false, classId: null, className: null, oid: null };
+  var lists = {};
+
+  /* ── plumbing ──────────────────────────────────────────────────────────────────────────── */
+  function esc(v) { return String(v == null ? '' : v).replace(/[&<>'"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]; }); }
+  function rowsOf(r) { if (!r) return []; if (Array.isArray(r)) return r; if (Array.isArray(r.rows)) return r.rows; if (r.data && Array.isArray(r.data.rows)) return r.data.rows; if (Array.isArray(r.data)) return r.data; return []; }
+  function warningsOf(r) { if (!r) return []; if (Array.isArray(r.warnings)) return r.warnings; if (r.data && Array.isArray(r.data.warnings)) return r.data.warnings; return []; }
+  function view(name, args) { return embabel.views.invoke(name, args || {}).then(function (r) { return { rows: rowsOf(r), warnings: warningsOf(r) }; }); }
+  function bytes(n) { if (n == null || n < 0) return '—'; var u = ['B', 'KB', 'MB', 'GB']; var i = 0; n = Number(n); while (n >= 1024 && i < 3) { n /= 1024; i++; } return (i ? n.toFixed(1) : n) + ' ' + u[i]; }
+  function num(n) { return n == null ? '—' : Number(n).toLocaleString(); }
+  function shortName(cn) { if (!cn) return ''; var s = String(cn).split(' ')[0]; var i = s.lastIndexOf('.'); return i < 0 ? s : s.slice(i + 1); }
+  function cls(cn) {
+    var s = String(cn || ''); var base = s.split(' ')[0]; var i = base.lastIndexOf('.');
+    return i < 0 ? '<span class="cls">' + esc(s) + '</span>' : '<span class="cls"><span class="pkg">' + esc(base.slice(0, i + 1)) + '</span>' + esc(s.slice(i + 1)) + '</span>';
+  }
+  function fieldShort(f) { if (!f) return ''; var s = String(f); var dot = s.lastIndexOf('.'); var owner = s.slice(0, dot); return shortName(owner) + '.' + s.slice(dot + 1); }
+  function loading(el, msg) { el.innerHTML = '<div class="empty"><span class="spin"></span>' + esc(msg || 'Reading…') + '</div>'; }
+  function failed(el, e) { el.innerHTML = '<div class="warn">' + esc(e && e.message ? e.message : String(e)) + '</div>'; }
+  function warn(ws) { return (ws || []).length ? ws.map(function (w) { return '<div class="warn">' + esc(String(w).slice(0, 400)) + '</div>'; }).join('') : ''; }
+  var ID = /^[0-9]{1,20}$/;
+  var NAME = /^[\w$.\[\] +-]{1,400}$/;
+
+  /* Java, lightly highlighted: a span per line, the hit lines marked. */
+  function highlight(line) {
+    var out = '', i = 0, s = line;
+    var re = /(\/\/.*$|\/\*.*?\*\/|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\b(?:public|private|protected|static|final|class|interface|enum|record|new|return|if|else|for|while|do|switch|case|default|break|continue|throw|throws|try|catch|finally|import|package|extends|implements|this|super|null|true|false|void|int|long|boolean|byte|char|short|double|float|synchronized|volatile|transient|var|instanceof|abstract)\b|\b\d[\d_]*L?\b)/g;
+    var m;
+    while ((m = re.exec(s)) !== null) {
+      out += esc(s.slice(i, m.index));
+      var t = m[0], c = /^\/[\/*]/.test(t) ? 'com' : /^["']/.test(t) ? 'str' : /^\d/.test(t) ? 'num' : 'kw';
+      out += '<span class="' + c + '">' + esc(t) + '</span>';
+      i = m.index + t.length;
+    }
+    return out + esc(s.slice(i));
+  }
+  function codeBlock(text, hits) {
+    if (!text) return '';
+    var hit = {}; (hits || []).forEach(function (h) { hit[h] = true; });
+    return '<pre class="code">' + String(text).split('\n').map(function (l) {
+      var m = l.match(/^(\d+): ?(.*)$/); var n = m ? Number(m[1]) : null; var body = m ? m[2] : l;
+      return '<span class="ln' + (n && hit[n] ? ' hit' : '') + '"><span class="n">' + (n || '') + '</span>' + highlight(body) + '</span>';
+    }).join('') + '</pre>';
+  }
+
+  /* ── header ────────────────────────────────────────────────────────────────────────────── */
+  function header() {
+    view('HeapOverviewTotals').then(function (r) {
+      var o = r.rows[0] || {};
+      $('tiles').innerHTML = [
+        ['Heap', bytes(o.heapBytes)], ['Objects', num(o.instances)], ['Classes', num(o.classes)],
+        ['GC roots', num(o.gcRoots)], ['Duplicate strings', bytes(o.duplicateStringWaste)],
+        ['Awaiting finalization', num(o.pendingFinalization)]
+      ].map(function (t) { return '<div class="tile"><b>' + esc(t[1]) + '</b><small>' + esc(t[0]) + '</small></div>'; }).join('');
+    }).catch(function (e) { $('tiles').innerHTML = '<span class="warn">' + esc(e.message) + ' — is jheapo serving REST?</span>'; });
+  }
+
+  /* ── left: where the memory is ─────────────────────────────────────────────────────────── */
+  var TABS = { retainers: 'HeapAppRetainers', histogram: 'HeapAppHistogram', suspects: 'HeapAppLeakSuspects' };
+  function list() {
+    var el = $('list'); var t = state.tab;
+    if (t === 'findings') return findingsList(el);
+    var go = lists[t] ? Promise.resolve(lists[t]) : view(TABS[t]).then(function (r) { lists[t] = r; return r; });
+    if (!lists[t]) loading(el, 'Reading ' + t + '…');
+    go.then(function (r) {
+      var rows = r.rows.filter(function (x) { return !state.mine || x.inApp; });
+      var size = function (x) { return t === 'histogram' ? x.shallowBytes : t === 'suspects' ? x.retainedSize : x.retainedBytes; };
+      var max = Math.max.apply(null, rows.map(size).concat([1]));
+      var note = t === 'retainers' ? '<div class="pad muted" style="font-size:11.5px">jheapo reports the classes above its retention threshold.</div>'
+        : t === 'histogram' ? '<div class="pad muted" style="font-size:11.5px">Top 30 by shallow bytes.</div>' : '';
+      el.innerHTML = warn(r.warnings) + (rows.length ? rows.map(function (x, i) {
+        var key = t === 'suspects' ? x.oid : x.classId; var sel = (t === 'suspects' ? state.oid : state.classId) === key;
+        return '<div class="row' + (x.inApp ? ' app' : '') + (sel ? ' sel' : '') + '" data-i="' + i + '">' + cls(x.className) +
+          (x.inApp ? '<span class="badge app">your code</span>' : '') + (x.hashCodeFrom === 'java.lang.Object' && x.inApp ? '<span class="badge id" title="hashCode is identity">identity hash</span>' : '') +
+          '<div class="meta"><span>' + bytes(size(x)) + (t === 'histogram' ? ' shallow' : ' retained') + '</span>' + (x.instances != null ? '<span>' + num(x.instances) + ' objects</span>' : '') + '</div>' +
+          '<div class="bar"><i style="width:' + Math.max(2, 100 * size(x) / max).toFixed(1) + '%"></i></div></div>';
+      }).join('') : '<div class="empty">Nothing here' + (state.mine ? ' from your code' : '') + '.</div>') + note;
+      Array.prototype.forEach.call(el.querySelectorAll('.row'), function (div) {
+        div.onclick = function () { var x = rows[Number(div.dataset.i)]; if (t === 'suspects') go2('object', x.oid, x.className); else go2('class', x.classId, x.className); };
+      });
+    }).catch(function (e) { failed(el, e); });
+  }
+
+  /* ── routing: #/class/<id>/<name>, #/object/<oid>/<name>, #/field/<Owner.field>, #/source/<class> ── */
+  function go2(kind, id, name) { location.hash = '#/' + kind + '/' + encodeURIComponent(id) + (name ? '/' + encodeURIComponent(name) : ''); }
+  function route() {
+    if (location.hash === '#/takeaways') return takeaways();
+    var fm = location.hash.match(/^#\/finding\/(HeapFindings[A-Za-z]+)$/); if (fm) return showFinding(fm[1]);
+    var m = location.hash.match(/^#\/(class|object|field|source)\/([^/]+)(?:\/([^/]+))?$/); if (!m) return;
+    var id = decodeURIComponent(m[2]), name = m[3] ? decodeURIComponent(m[3]) : null;
+    if (name && !NAME.test(name)) name = null;
+    if (m[1] === 'class' && ID.test(id)) openClass(id, name);
+    else if (m[1] === 'object' && ID.test(id)) openObject(id, name);
+    else if (m[1] === 'field' && NAME.test(id)) showField(id);
+    else if (m[1] === 'source' && NAME.test(id)) showSource(id);
+  }
+
+  function crumbs(parts) {
+    $('crumbs').innerHTML = parts.map(function (p) { return p.href ? '<a href="' + esc(p.href) + '">' + esc(p.text) + '</a>' : '<span>' + esc(p.text) + '</span>'; }).join(' <span class="muted">›</span> ');
+  }
+
+  /* ── a class: the diagnosis, then its instances ────────────────────────────────────────── */
+  function openClass(classId, className) {
+    state.classId = classId; state.className = className; state.oid = null; list();
+    crumbs([{ text: shortName(className) || classId }]);
+    var w = $('work');
+    w.innerHTML = '<div class="card diag"><h3>Diagnosis <span class="act muted" id="dstate"><span class="spin"></span>walking holders</span></h3><div id="diag"></div></div>' +
+      '<div class="card"><h3>Instances <span class="act muted">a sample · click one to walk it</span></h3><div class="oids" id="inst"><span class="muted"><span class="spin"></span></span></div></div>';
+    view('HeapAppInstances', { classId: classId }).then(function (r) {
+      $('inst').innerHTML = r.rows.length ? r.rows.map(function (o) { return '<span class="oid" data-o="' + esc(o.oid) + '">' + esc(o.oid) + '</span>'; }).join('') : '<span class="muted">No instances listed.</span>';
+      Array.prototype.forEach.call($('inst').querySelectorAll('.oid'), function (s) { s.onclick = function () { go2('object', s.dataset.o, className); }; });
+    }).catch(function (e) { failed($('inst'), e); });
+    if (className) showSource(className, true);
+    view('HeapAppClassHolders', { classId: classId }).then(function (r) {
+      var rows = r.rows; $('dstate').textContent = rows.length + ' holder groups in a sample of instances';
+      var mine = rows.filter(function (x) { return x.inApp && x.field; });
+      var lead = mine.length
+        ? 'Your code holds <b>' + esc(shortName(className)) + '</b> through ' + mine.length + ' field' + (mine.length > 1 ? 's' : '') + ': ' +
+          mine.map(function (x) { return '<span class="field" data-f="' + esc(x.field) + '">' + esc(fieldShort(x.field)) + '</span>'; }).join(', ') + '. Each is a convergence point — open it to see the code that fills it.'
+        : 'No field of your code holds these instances directly. The holders below are library or array slots: walk an instance to find where your code takes over.';
+      $('diag').innerHTML = warn(r.warnings) + '<div class="verdict">' + lead + '</div>' + rows.map(function (x) {
+        return '<div class="hop' + (x.inApp ? ' app' : '') + '"><div class="dot"></div><div>' + cls(x.holder) + (x.inApp ? '<span class="badge app">your code</span>' : '') +
+          '<div class="meta"><span>holds ' + num(x.objects) + ' of the sample</span>' + (x.field ? '<span>by <span class="field" data-f="' + esc(x.field) + '">' + esc(fieldShort(x.field)) + '</span></span>' : '<span>by array slot</span>') +
+          (x.holderOids && x.holderOids[0] ? '<span class="link" data-o="' + esc(x.holderOids[0]) + '" data-c="' + esc(x.holder) + '">walk holder ›</span>' : '') + '</div></div></div>';
+      }).join('');
+      wire($('diag'));
+      if (mine[0]) showField(mine[0].field, true);
+    }).catch(function (e) { $('dstate').textContent = ''; failed($('diag'), e); });
+  }
+
+  /* ── an object: find the code, holders, fields, path ───────────────────────────────────── */
+  function openObject(oid, className) {
+    state.oid = oid; if (state.tab === 'suspects') list();
+    crumbs([state.classId ? { text: shortName(state.className), href: '#/class/' + state.classId + '/' + encodeURIComponent(state.className || '') } : null, { text: shortName(className) + ' ' + oid }].filter(Boolean));
+    var w = $('work');
+    w.innerHTML = '<div class="card diag"><h3>Vector to your code <span class="act"><button class="btn hot" id="vec">Find the code</button></span></h3><div id="vector"><div class="verdict muted">Walks up the holders, one at a time, until a field of your own code holds the chain — the place to change.</div></div></div>' +
+      '<div class="card"><h3>Held by</h3><div id="holders"></div></div>' +
+      '<div class="card"><h3>Holds</h3><div id="fields"></div></div>' +
+      '<div class="card"><h3>Path from GC root</h3><div id="path"></div></div>';
+    $('vec').onclick = function () { vector(oid, className); };
+    loading($('holders')); loading($('fields')); loading($('path'));
+    view('HeapAppHolders', { oid: oid }).then(function (r) {
+      $('holders').innerHTML = warn(r.warnings) + (r.rows.length ? r.rows.map(function (h) {
+        return '<div class="hop' + (h.inApp ? ' app' : '') + '"><div class="dot"></div><div>' + cls(h.className) + (h.inApp ? '<span class="badge app">your code</span>' : '') +
+          '<div class="meta">' + (h.field ? '<span>by <span class="field" data-f="' + esc(h.field) + '">' + esc(fieldShort(h.field)) + '</span></span>' : '<span>by ' + esc((h.through || []).join(', ')) + '</span>') +
+          (h.declaredAs ? '<span class="mono">' + esc(shortName(h.declaredAs)) + (h.isStatic ? ' · static' : '') + '</span>' : '') +
+          '<span class="link" data-o="' + esc(h.oid) + '" data-c="' + esc(h.className) + '">walk ›</span></div></div></div>';
+      }).join('') : '<div class="empty">Nothing holds it: it is a root, or garbage.</div>');
+      wire($('holders'));
+    }).catch(function (e) { failed($('holders'), e); });
+    view('HeapAppFields', { oid: oid }).then(function (r) {
+      $('fields').innerHTML = r.rows.length ? r.rows.map(function (v) {
+        return '<div class="hop' + (v.inApp ? ' app' : '') + '"><div class="dot"></div><div><span class="field" data-f="' + esc(v.field) + '">' + esc(fieldShort(v.field)) + '</span> → ' + cls(v.className) +
+          ' <span class="link" data-o="' + esc(v.oid) + '" data-c="' + esc(v.className) + '">walk ›</span></div></div>';
+      }).join('') : '<div class="empty">No reference fields.</div>';
+      wire($('fields'));
+    }).catch(function (e) { failed($('fields'), e); });
+    view('HeapAppPath', { oid: oid }).then(function (r) { $('path').innerHTML = path(r.rows); wire($('path')); }).catch(function (e) { failed($('path'), e); });
+    if (className && NAME.test(className)) showSource(className, true);
+  }
+
+  /* A path, root first, with runs of library steps folded so your code's steps stand out. */
+  function path(rows) {
+    if (!rows.length) return '<div class="empty">No path to a root: unreachable, or a root itself.</div>';
+    var out = [], run = [];
+    function flush() {
+      if (!run.length) return;
+      if (run.length <= 2) { run.forEach(function (s) { out.push(step(s)); }); }
+      else { out.push(step(run[0])); out.push('<div class="collapsed" data-fold="' + esc(JSON.stringify(run.slice(1, -1).map(function (s) { return s.step; }))) + '">⋯ ' + (run.length - 2) + ' library steps</div>'); out.push(step(run[run.length - 1])); }
+      run = [];
+    }
+    function step(s) {
+      return '<div class="hop' + (s.inApp ? ' app' : '') + (s.step === 0 ? ' root' : '') + '" data-step="' + s.step + '"><div class="dot"></div><div>' + cls(s.className) +
+        (s.inApp ? '<span class="badge app">your code</span>' : s.step === 0 ? '<span class="badge jdk">GC root</span>' : '') +
+        '<div class="meta"><span>step ' + s.step + '</span>' + (s.source ? '<span class="link" data-src="' + esc(s.className) + '">' + esc(s.source) + '</span>' : '') +
+        '<span class="link" data-o="' + esc(s.oid) + '" data-c="' + esc(s.className) + '">walk ›</span></div></div></div>';
+    }
+    rows.forEach(function (s) { if (s.inApp) { flush(); out.push(step(s)); } else run.push(s); });
+    flush();
+    var first = rows.filter(function (s) { return s.inApp; })[0];
+    var lead = first ? '<div class="verdict">The chain enters your code at step ' + first.step + ', <b>' + esc(shortName(first.className)) + '</b>, after ' + first.step + ' JDK and library steps from its GC root.</div>'
+      : '<div class="verdict muted">This path runs through library code only.</div>';
+    var html = lead + out.join('');
+    setTimeout(function () {
+      Array.prototype.forEach.call(document.querySelectorAll('.collapsed'), function (c) {
+        c.onclick = function () { var steps = JSON.parse(c.dataset.fold); c.outerHTML = rows.filter(function (s) { return steps.indexOf(s.step) >= 0; }).map(step).join(''); wire($('path')); };
+      });
+    });
+    return html;
+  }
+
+  /* Find the code: up the holders until your code's field holds the chain. */
+  function vector(oid, className) {
+    var el = $('vector'); var hops = []; var seen = {}; var cur = { oid: oid, className: className };
+    el.innerHTML = '<div class="verdict"><span class="spin"></span>Walking up from ' + esc(shortName(className)) + '…</div>';
+    function draw(done, found) {
+      var lead = found ? '<div class="verdict"><b>' + esc(shortName(className)) + '</b> is held ' + (hops.length - 1 ? (hops.length - 1) + ' step' + (hops.length > 2 ? 's' : '') + ' up ' : '') + 'by your field <span class="field" data-f="' + esc(found.field) + '">' + esc(fieldShort(found.field)) + '</span> of <b>' + esc(shortName(found.className)) + '</b>. That field is where the memory is kept; the code panel shows what fills it.</div>'
+        : done ? '<div class="verdict">No field of your code was reached in ' + hops.length + ' steps: the vector stops in library code.</div>' : '<div class="verdict"><span class="spin"></span>Walking…</div>';
+      el.innerHTML = lead + hops.map(function (h, i) {
+        return '<div class="hop' + (h.inApp ? ' app' : '') + '"><div class="dot"></div><div>' + cls(h.className) + (h.inApp ? '<span class="badge app">your code</span>' : '') +
+          '<div class="meta"><span>' + (i + 1) + ' up</span>' + (h.field ? '<span>by <span class="field" data-f="' + esc(h.field) + '">' + esc(fieldShort(h.field)) + '</span></span>' : '<span>by ' + esc((h.through || []).join(', ')) + '</span>') + '<span class="mono muted">' + esc(h.oid) + '</span></div></div></div>';
+      }).join('');
+      wire(el);
+    }
+    function up(n) {
+      if (n >= 12) return draw(true, null);
+      seen[cur.oid] = true;
+      return view('HeapAppHolders', { oid: cur.oid }).then(function (r) {
+        var hs = r.rows.filter(function (h) { return !seen[h.oid]; });
+        if (!hs.length) return draw(true, null);
+        var pick = hs.filter(function (h) { return h.inApp && h.field; })[0] || hs.filter(function (h) { return h.field; })[0] || hs[0];
+        hops.push(pick); draw(false, null);
+        if (pick.inApp && pick.field) { draw(true, pick); showField(pick.field, true); return; }
+        cur = pick; return up(n + 1);
+      });
+    }
+    up(0).catch(function (e) { failed(el, e); });
+  }
+
+  function wire(root) {
+    Array.prototype.forEach.call(root.querySelectorAll('[data-f]'), function (a) { a.onclick = function (ev) { ev.stopPropagation(); location.hash = '#/field/' + encodeURIComponent(a.dataset.f); }; });
+    Array.prototype.forEach.call(root.querySelectorAll('[data-o]'), function (a) { a.onclick = function (ev) { ev.stopPropagation(); go2('object', a.dataset.o, a.dataset.c); }; });
+    Array.prototype.forEach.call(root.querySelectorAll('[data-src]'), function (a) { a.onclick = function (ev) { ev.stopPropagation(); location.hash = '#/source/' + encodeURIComponent(a.dataset.src); }; });
+  }
+
+  /* ── right: the code ───────────────────────────────────────────────────────────────────── */
+  var codeToken = 0;
+  function showField(field, quiet) {
+    var t = ++codeToken; var el = $('code');
+    $('codeTitle').innerHTML = 'Field <span class="mono">' + esc(fieldShort(field)) + '</span>';
+    loading(el, 'Reading the field from the jar and its source…');
+    Promise.all([view('HeapAppFieldCode', { field: field }), view('HeapAppFieldGrowth', { field: field })]).then(function (rs) {
+      if (t !== codeToken) return;
+      var code = rs[0].rows, growth = rs[1].rows;
+      if (!code.length) { el.innerHTML = '<div class="empty">This field is not in the application\'s jar (a JDK or library field).</div>'; return; }
+      var f = code[0];
+      var html = '<div class="kv"><div>Field</div><div class="mono">' + esc(f.field) + '</div><div>Declared as</div><div class="mono">' + esc(f.declaredAs) + '</div>' +
+        '<div>Kind</div><div>' + (f.isStatic ? '<b style="color:var(--bad)">static</b>' : 'instance') + (f.isFinal ? ' · final' : '') + (f.container && f.container !== 'none' ? ' · ' + esc(f.container) : '') + '</div>' +
+        '<div>Owner</div><div><span class="link" data-src="' + esc(f.field.slice(0, f.field.lastIndexOf('.'))) + '">' + esc(shortName(f.field.slice(0, f.field.lastIndexOf('.')))) + ' source ›</span></div></div>';
+      if (growth.length) {
+        html += '<div class="src-h"><b style="color:var(--app)">Where it grows</b><span class="muted">' + growth.length + ' call' + (growth.length > 1 ? 's' : '') + '</span></div>' +
+          growth.map(function (g) {
+            return '<div class="src-h"><span class="mono">' + esc(shortName(g.method.split('(')[0].replace(/\.[^.]*$/, '')) + '.' + g.method.split('(')[0].split('.').pop()) + '</span><span class="muted">line ' + esc(g.line) + (g.argumentTypes && g.argumentTypes.filter(Boolean).length ? ' · ' + esc(g.argumentTypes.map(function (a) { return a ? shortName(a) : '?'; }).join(', ')) : '') + '</span></div>' +
+              codeBlock(g.line + ': ' + g.code, [g.line]);
+          }).join('');
+      }
+      var writes = code.filter(function (c) { return c.method; });
+      html += '<div class="src-h"><b>Every access</b><span class="muted">' + writes.length + '</span></div>' + writes.map(function (c) {
+        return '<div class="src-h"><span class="mono">' + esc(c.access) + ' in ' + esc(c.method.split('(')[0].split('.').slice(-2).join('.')) + '</span><span class="muted">lines ' + esc((c.lines || []).join(', ')) + '</span></div>' + codeBlock(c.code, c.lines);
+      }).join('');
+      el.innerHTML = html; wire(el); if (!quiet) el.scrollTop = 0;
+    }).catch(function (e) { if (t === codeToken) failed(el, e); });
+  }
+
+  function showSource(className, quiet) {
+    var t = ++codeToken; var el = $('code');
+    $('codeTitle').innerHTML = 'Class <span class="mono">' + esc(shortName(className)) + '</span>';
+    loading(el, 'Reading the source…');
+    view('HeapAppClassSource', { className: className }).then(function (r) {
+      if (t !== codeToken) return;
+      if (!r.rows.length) { el.innerHTML = '<div class="empty">' + esc(shortName(className)) + ' is not in the application\'s jar, or its source was not found.</div>'; return; }
+      var file = r.rows[0];
+      el.innerHTML = '<div class="src-h"><span class="mono">' + esc(file.source) + '</span><span class="muted">' + esc(file.lines) + ' lines</span></div>' +
+        r.rows.filter(function (d) { return d.kind; }).map(function (d) {
+          var label = d.signature || d.name;
+          return '<details class="decl"' + (d.kind === 'method' || d.kind === 'constructor' ? '' : '') + '><summary><span class="k">' + esc(d.kind) + '</span><span class="s">' + esc(label) + '</span><span class="l">' + esc(d.fromLine) + '–' + esc(d.toLine) + '</span></summary>' +
+            (d.javadoc ? '<div class="doc">' + esc(String(d.javadoc).replace(/\{@code ([^}]*)\}/g, '$1').replace(/<[^>]+>/g, '').slice(0, 600)) + '</div>' : '') + codeBlock(d.code) + '</details>';
+        }).join('');
+    }).catch(function (e) { if (t === codeToken) failed(el, e); });
+  }
+
+  /* ── findings: one view per classic problem; an empty one is good news ──────────────────── */
+  var FINDINGS = [
+    ['HeapFindingsWaste', 'Waste jheapo measured'], ['HeapFindingsIdleCollections', 'Empty & single-element collections'],
+    ['HeapFindingsNestedCollections', 'Collections of collections'], ['HeapFindingsDuplicateStrings', 'Duplicate strings'],
+    ['HeapFindingsStringHolders', 'Who holds the strings'], ['HeapFindingsStaticPins', 'Pinned by a static field'],
+    ['HeapFindingsListenerLeaks', 'Listener & callback leaks'], ['HeapFindingsIdentityKeys', 'Identity-hashed map keys'],
+    ['HeapFindingsThreadLocalRetention', 'Retained through ThreadLocals'], ['HeapFindingsYourDominators', 'Big retainers through your code'],
+    ['HeapFindingsHumongous', 'Humongous arrays (G1)'], ['HeapFindingsEntanglement', 'Entangled classes'],
+    ['HeapFindingsBlockedThreads', 'Blocked & waiting threads'], ['HeapFindingsStacksInYourCode', 'Threads in your code'],
+    ['HeapFindingsThreads', 'All threads'], ['HeapFindingsClassLoaders', 'Class loaders'], ['HeapFindingsFinalization', 'Finalization']
+  ];
+  var findingRows = {};
+  function findingsList(el) {
+    el.innerHTML = FINDINGS.map(function (f, i) {
+      var r = findingRows[f[0]];
+      var n = r ? '<span class="n ' + (r.rows.length ? 'hit' : 'ok') + '">' + (r.rows.length ? r.rows.length : 'none ✓') + '</span>' : '<span class="n"><span class="spin" style="margin:0"></span></span>';
+      return '<div class="row finding" data-i="' + i + '"><div style="display:flex;gap:8px;align-items:center"><span>' + esc(f[1]) + '</span>' + n + '</div></div>';
+    }).join('');
+    Array.prototype.forEach.call(el.querySelectorAll('.row'), function (div) { div.onclick = function () { location.hash = '#/finding/' + FINDINGS[Number(div.dataset.i)][0]; }; });
+    FINDINGS.forEach(function (f) {
+      if (findingRows[f[0]]) return;
+      view(f[0]).then(function (r) { findingRows[f[0]] = r; if (state.tab === 'findings') findingsList(el); })
+        .catch(function (e) { findingRows[f[0]] = { rows: [], warnings: [e.message] }; if (state.tab === 'findings') findingsList(el); });
+    });
+  }
+  function showFinding(name) {
+    var f = FINDINGS.filter(function (x) { return x[0] === name; })[0]; if (!f) return;
+    crumbs([{ text: 'Findings' }, { text: f[1] }]);
+    var w = $('work'); loading(w, 'Running ' + f[1] + '…');
+    (findingRows[name] ? Promise.resolve(findingRows[name]) : view(name)).then(function (r) {
+      findingRows[name] = r;
+      if (!r.rows.length) { w.innerHTML = warn(r.warnings) + '<div class="card"><h3>' + esc(f[1]) + '</h3><div class="verdict" style="color:var(--good)">Nothing found — on this heap, that is good news.</div></div>'; return; }
+      var cols = Object.keys(r.rows[0]);
+      w.innerHTML = warn(r.warnings) + '<div class="card"><h3>' + esc(f[1]) + ' <span class="act muted">' + r.rows.length + ' rows</span></h3><div style="overflow:auto"><table class="t"><tr>' +
+        cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join('') + '</tr>' + r.rows.map(function (row) {
+          return '<tr>' + cols.map(function (c) {
+            var v = row[c];
+            if (v === true) return '<td style="color:var(--app)">yes</td>'; if (v === false) return '<td class="muted">no</td>';
+            if (typeof v === 'number' && /byte|wasted|needed|footprint/i.test(c)) return '<td>' + bytes(v) + '</td>';
+            if (typeof v === 'string' && /\n/.test(v)) return '<td>' + codeBlock(v) + '</td>';
+            if (Array.isArray(v)) return '<td>' + esc(v.join(', ')) + '</td>';
+            if (typeof v === 'string' && /^[a-z][\w$]*(\.[\w$]+)+$/.test(v) && /field/i.test(c)) return '<td><span class="field" data-f="' + esc(v) + '">' + esc(fieldShort(v)) + '</span></td>';
+            return '<td>' + esc(v == null ? '—' : typeof v === 'number' ? num(v) : v) + '</td>';
+          }).join('') + '</tr>';
+        }).join('') + '</table></div></div>';
+      wire(w);
+    }).catch(function (e) { failed(w, e); });
+  }
+
+  /* ── takeaways: written by the world's `summary` model from the evidence the lens gathers ── */
+  function lensData(r) { var d = r && (r.data || r); if (d && typeof d.content === 'string') { try { return JSON.parse(d.content); } catch (e) {} } return d && d.result ? d.result : d; }
+  function prose(text) {
+    /* The model's words are untrusted: escaped, then only `code` spans are drawn. */
+    return esc(text).replace(/`([^`\n]{1,200})`/g, '<code>$1</code>').replace(/\n{2,}/g, '<br><br>');
+  }
+  function takeaways() {
+    crumbs([{ text: 'Takeaways' }]);
+    var w = $('work');
+    w.innerHTML = '<div class="card take"><h3>Takeaways <span class="act muted" id="tstate"></span></h3><div id="take">' +
+      '<div class="pending muted"><span class="spin"></span>Gathering the evidence from the heap, the jar and the source, then asking the model behind this world\'s <code>summary</code> role to write it up. A local model reading this much evidence takes a minute or two.</div>' +
+      '<div class="pad" id="tprogress"></div></div></div>';
+    var t0 = Date.now();
+    var clock = setInterval(function () { var el = $('tstate'); if (!el) return clearInterval(clock); el.textContent = Math.round((Date.now() - t0) / 1000) + ' s'; }, 1000);
+    embabel.lenses.invoke('heap-takeaways', {}, { state: $('tprogress') }).then(function (r) {
+      clearInterval(clock);
+      var out = lensData(r) || {};
+      if (out.error || !out.text) {
+        $('tstate').textContent = '';
+        $('take').innerHTML = '<div class="warn">' + esc(out.error || 'The lens returned no text.') + '</div>';
+        return;
+      }
+      var words = String(out.text).split(/\s+/).filter(Boolean).length;
+      $('tstate').textContent = words + ' words · role ' + (out.role || 'summary') + ' · ' + Math.round((Date.now() - t0) / 1000) + ' s';
+      var src = out.sources || {};
+      $('take').innerHTML = '<div class="verdict">' + prose(out.text) + '</div>' +
+        '<div class="why">Written by the model behind this world\'s <code>' + esc(out.role || 'summary') + '</code> role from ' + esc(src.views || '?') +
+        ' view results (' + num(out.evidenceChars) + ' characters of evidence)' + (src.applicationRetainer ? ', including the source of ' + esc(shortName(src.applicationRetainer)) : '') + '. Check it against the evidence on the left.</div>' +
+        ((src.fields || []).length ? '<div class="pad">' + src.fields.map(function (f) { return '<span class="field" data-f="' + esc(f) + '">' + esc(fieldShort(f)) + '</span>'; }).join(' · ') + '</div>' : '');
+      wire($('take'));
+      if ((src.fields || [])[0]) showField(src.fields[0], true);
+    }).catch(function (e) { clearInterval(clock); $('tstate').textContent = ''; failed($('take'), e); });
+  }
+
+  /* ── wiring ────────────────────────────────────────────────────────────────────────────── */
+  Array.prototype.forEach.call(document.querySelectorAll('#tabs button'), function (b) {
+    b.onclick = function () { document.querySelectorAll('#tabs button').forEach(function (x) { x.classList.toggle('on', x === b); }); state.tab = b.dataset.t; list(); };
+  });
+  $('mine').onchange = function () { state.mine = $('mine').checked; try { localStorage.setItem('heap-lens.mine', state.mine ? '1' : ''); } catch (e) {} list(); };
+  addEventListener('keydown', function (e) { if (e.key === 'm' && !/input|textarea/i.test(e.target.tagName)) { $('mine').click(); } });
+  addEventListener('hashchange', route);
+  try { if (localStorage.getItem('heap-lens.mine')) { $('mine').checked = true; state.mine = true; } } catch (e) {}
+  $('takeBtn').onclick = function () { location.hash = '#/takeaways'; };
+  header(); list();
+  if (location.hash) route();
+  else lists.retainers = null, view('HeapAppRetainers').then(function (r) {
+    lists.retainers = r; list();
+    location.hash = '#/takeaways';
+  }).catch(function () {});
+})();
+</script>
+<div id="embabel-badge" style="position:fixed;bottom:0;left:0;right:0;text-align:center;padding:5px 0;background:rgba(11,13,18,0.94);border-top:1px solid rgba(99,192,245,0.2);font-size:0.72rem;color:#6b7280;z-index:9999;pointer-events:none;">
+  Built with <a href="https://worlds.embabel.com" style="color:#63c0f5;text-decoration:none;pointer-events:auto;">Embabel Worlds</a> · heap read by jheapo
+</div>
+</body>
+</html>

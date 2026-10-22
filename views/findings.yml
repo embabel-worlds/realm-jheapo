@@ -1,0 +1,149 @@
+# Findings: one view per classic Java memory or concurrency problem. Each is written to say something
+# on ANY heap — an empty answer is itself the finding ("no thread is blocked", "nothing is pinned by
+# a static") — and each carries what it finds into the application's jar and source where that is
+# where the answer lives. The jar is the one the producers name (hardcoded for now).
+
+- name: HeapFindingsWaste
+  description: "Every kind of waste jheapo measured, largest first: what it is, the bytes, how sure, the class it points at, whether that is the application's own code, and the remedy."
+  cypher: |
+    MATCH (h:Heap {name: 'current'})-[:HAS_WASTE]->(w:HeapWasteFinding)
+    RETURN w.headline AS waste, w.bytes AS bytes, w.confidence AS confidence, w.recovery AS recovery,
+           w.vector AS pointsAt, w.reachesCode AS yourCode, w.remedy AS remedy
+    ORDER BY bytes DESC
+
+- name: HeapFindingsDuplicateStrings
+  description: "The string values held in the most wasteful numbers of copies: candidates for interning, a constant, or an enum."
+  cypher: |
+    MATCH (h:Heap {name: 'current'})-[:DUPLICATE_STRING]->(s:HeapDuplicateString)
+    RETURN s.sample AS value, s.count AS copies, s.wasted AS wastedBytes
+    ORDER BY wastedBytes DESC
+    LIMIT 30
+
+- name: HeapFindingsStringHolders
+  description: "Who holds the heap's strings, and how few distinct values they hold: a field holding thousands of strings with a handful of values is a cache or an interning win."
+  cypher: |
+    MATCH (h:Heap {name: 'current'})-[:STRINGS_HELD_BY]->(s:HeapStringHolder)
+    RETURN s.name AS heldBy, s.objects AS strings, s.distinctValues AS distinctValues, s.memoryBytes AS bytes,
+           s.overheadBytes AS duplicationBytes,
+           CASE WHEN s.objects > 0 THEN round(100.0 * (s.objects - s.distinctValues) / s.objects) ELSE 0 END AS duplicatePct
+    ORDER BY duplicationBytes DESC
+
+- name: HeapFindingsIdleCollections
+  description: "Collections allocated and left empty, or holding a single element: eager allocation that a lazy initialisation or a singleton collection would save."
+  cypher: |
+    MATCH (h:Heap {name: 'current'})-[:EMPTY_COLLECTION]->(e:HeapIdleCollection)
+    WITH h, collect(e) AS empty
+    MATCH (h)-[:SINGLETON_COLLECTION]->(s:HeapIdleCollection)
+    WITH empty, collect(s) AS singleton
+    WITH empty + singleton AS idle
+    UNWIND idle AS c
+    RETURN c.shape AS shape, c.className AS collection, c.count AS count, c.shallowBytes AS bytes
+    ORDER BY bytes DESC
+
+- name: HeapFindingsNestedCollections
+  description: "Collections of collections and the fields that hold them, statically held first, with how the application declares the field and the code that assigns it - the shape of most unbounded caches."
+  cypher: |
+    MATCH (h:Heap {name: 'current'})-[:NESTED_COLLECTION]->(n:HeapNestedCollection)
+    OPTIONAL MATCH (n)-[:HELD_IN]->(f:JavaField)
+    RETURN n.fieldKey AS field, n.inStatic AS static, n.collectionClass AS outer, n.storedClass AS inner,
+           n.references AS innerCollections, f.genericType AS declaredAs, f IS NOT NULL AS yourCode
+    ORDER BY static DESC, yourCode DESC, innerCollections DESC
+
+- name: HeapFindingsThreads
+  description: "Every thread by state, with stack depth and the objects its frames hold: what the application was doing when the dump was taken."
+  cypher: |
+    MATCH (h:Heap {name: 'current'})-[:HAS_THREAD]->(t:HeapThread)
+    RETURN t.state AS state, t.name AS thread, t.daemon AS daemon, t.frameCount AS frames, t.localCount AS locals
+    ORDER BY state, frames DESC
+
+- name: HeapFindingsBlockedThreads
+  description: "Threads BLOCKED on a monitor or WAITING, each with the frame it is stuck in and that line of source when the application's jar compiled it. Empty is good news."
+  cypher: |
+    MATCH (h:Heap {name: 'current'})-[:HAS_THREAD]->(t:HeapThread)
+    WHERE t.state IN ['BLOCKED', 'WAITING']
+    MATCH (t)-[:HAS_FRAME]->(f:HeapStackFrame {frame: 0})
+    OPTIONAL MATCH (f)-[:SOURCE_AT]->(s:SourceSpan)
+    RETURN t.state AS state, t.name AS thread, f.label AS stuckIn, s.text AS code
+    ORDER BY state, thread
+
+- name: HeapFindingsStacksInYourCode
+  description: "Where each thread was in the application's own code: every frame of a class the application's jar compiled, with the line it was executing in context. A stack trace you can read as source."
+  cypher: |
+    MATCH (h:Heap {name: 'current'})-[:HAS_THREAD]->(t:HeapThread)-[:HAS_FRAME]->(f:HeapStackFrame)-[:COMPILED_AS]->(c:JavaType)
+    OPTIONAL MATCH (f)-[:SOURCE_AT]->(s:SourceSpan)
+    RETURN t.name AS thread, t.state AS state, f.frame AS frame, f.className + '.' + f.method AS method, f.line AS line,
+           s.matches AS sourceMatches, s.text AS code
+    ORDER BY thread, frame
+
+- name: HeapFindingsThreadLocalRetention
+  description: "Large retainers whose path from a GC root runs through a ThreadLocal: memory a thread keeps alive per thread, which a pooled thread never lets go of."
+  cypher: |
+    MATCH (h:Heap {name: 'current'})-[:DOMINATES]->(o:HeapObject)-[:PATH_TO_ROOT]->(p:HeapPathStep)
+    WHERE p.className = 'java.lang.ThreadLocal$ThreadLocalMap$Entry'
+    RETURN DISTINCT o.className AS retainer, o.retainedSize AS retainedBytes, o.oid AS oid
+    ORDER BY retainedBytes DESC
+
+- name: HeapFindingsStaticPins
+  description: "Large retainers held directly by a static field: memory that lives as long as its class loader. Shows the field, how it is declared, and whether the application owns it."
+  cypher: |
+    MATCH (h:Heap {name: 'current'})-[:DOMINATES]->(o:HeapObject)-[:HELD_BY]->(hd:HeapHolder)-[:HELD_IN]->(f:JavaField {isStatic: true})
+    RETURN o.className AS retainer, o.retainedSize AS retainedBytes, f.key AS staticField, f.genericType AS declaredAs, f.isFinal AS final
+    ORDER BY retainedBytes DESC
+
+- name: HeapFindingsListenerLeaks
+  description: "Large retainers held through a field whose name says listener, callback, observer, handler or subscriber: the registration that is never removed, the most common leak in event-driven code."
+  cypher: |
+    MATCH (h:Heap {name: 'current'})-[:DOMINATES]->(o:HeapObject)-[:HELD_BY]->(hd:HeapHolder)
+    WHERE any(t IN hd.through WHERE toLower(t) =~ '.*(listener|callback|observer|handler|subscriber|watcher).*')
+    RETURN o.className AS retainer, o.retainedSize AS retainedBytes, hd.className AS holder, hd.through AS through
+    ORDER BY retainedBytes DESC
+
+- name: HeapFindingsIdentityKeys
+  description: "Objects of the application's classes used as hash-map keys while their class never overrides hashCode: equal-looking keys are different entries, and a key not kept can never be found again."
+  cypher: |
+    MATCH (h:Heap {name: 'current'})-[:HAS_CLASS]->(c:HeapClass)-[:COMPILED_AS]->(t:JavaType {hashCodeFrom: 'java.lang.Object', kind: 'class'})
+    MATCH (c)-[:HAS_INSTANCE]->(o:HeapObject)-[:HELD_BY]->(hd:HeapHolder)
+    WHERE any(x IN hd.through WHERE x ENDS WITH '$Node.key' OR x ENDS WITH '$Entry.key')
+    RETURN c.className AS keyClass, count(DISTINCT o) AS keysInSample, collect(DISTINCT hd.className) AS heldAsKeyOf, t.equalsFrom AS equalsFrom
+    ORDER BY keysInSample DESC
+
+- name: HeapFindingsClassLoaders
+  description: "Class loaders by type and state, unreachable ones first: an unreachable loader still holding classes is the redeploy leak that ends in Metaspace exhaustion."
+  cypher: |
+    MATCH (h:Heap {name: 'current'})-[:HAS_CLASS_LOADERS]->(g:HeapClassLoaderGroup)
+    RETURN g.type AS loader, g.state AS state, g.instances AS loaders, g.unreachable AS unreachable,
+           g.classesDefined AS classes, g.classesPerLoader AS classesPerLoader
+    ORDER BY unreachable DESC, classes DESC
+
+- name: HeapFindingsHumongous
+  description: "Arrays big enough to be G1 humongous objects, by the class holding them: the bytes they need against the region footprint they take, and whether the application's code holds them."
+  cypher: |
+    MATCH (h:Heap {name: 'current'})-[:HUMONGOUS]->(a:HeapHumongousArray)
+    OPTIONAL MATCH (a)-[:COMPILED_AS]->(t:JavaType)
+    RETURN a.ownerClassName AS heldBy, a.arrayClassName AS array, a.instances AS arrays, a.totalTrueBytes AS needed,
+           a.totalFootprintBytes AS footprint, a.totalWastedBytes AS wasted, t IS NOT NULL AS yourCode
+    ORDER BY wasted DESC
+
+- name: HeapFindingsEntanglement
+  description: "Classes whose instances keep each other alive - reachable only through one another - and the bytes held that way: what one change would release together."
+  cypher: |
+    MATCH (h:Heap {name: 'current'})-[:ENTANGLED]->(e:HeapEntanglement)
+    OPTIONAL MATCH (e)-[:COMPILED_AS]->(t:JavaType)
+    RETURN e.name AS class, e.instances AS instances, e.entPct AS entangledPct, e.entangledBytes AS bytes, t IS NOT NULL AS yourCode
+    ORDER BY bytes DESC
+
+- name: HeapFindingsFinalization
+  description: "The finalization backlog: objects waiting for a finalizer, and finalizers and cleaners registered. A pending count above zero means the finalizer thread is behind - memory waits on it."
+  cypher: |
+    MATCH (h:Heap {name: 'current'})-[:HAS_FINALIZATION]->(f:HeapFinalization)
+    RETURN f.pending AS pending, f.registered AS registered, f.finalized AS finalized, f.finalizersRegistered AS finalizers,
+           f.cleanupActions AS cleaners
+
+- name: HeapFindingsYourDominators
+  description: "The largest retainers whose path from a GC root passes through the application's own code: what your code is responsible for keeping alive, and the first of its classes on the way."
+  cypher: |
+    MATCH (h:Heap {name: 'current'})-[:DOMINATES]->(o:HeapObject)-[:PATH_TO_ROOT]->(p:HeapPathStep)-[:COMPILED_AS]->(t:JavaType)
+    WITH o, min(p.step) AS firstStep
+    MATCH (o)-[:PATH_TO_ROOT]->(p:HeapPathStep {step: firstStep})
+    RETURN o.className AS retainer, o.retainedSize AS retainedBytes, p.className AS throughYourClass, firstStep AS atStep
+    ORDER BY retainedBytes DESC

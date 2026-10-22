@@ -1,0 +1,29 @@
+# The heap read against the logs (realm-jvm-logs): the code that holds the heap, and the code
+# that failed, in the same jar.
+
+- name: JheapoRetainerWritersInFailures
+  description: >-
+    The classes retaining the most of the current heap, every method in the jar that writes their
+    fields, and whether that method appears in a failure the logs recorded - is the code growing
+    the heap the code that is failing?
+  cypher: |
+    MATCH (me:AssistantUser)-[:HAS_LOG_EVENT]->(e:LogEvent {hasTrace: true})-[:HAS_FRAME]->(f:JavaStackFrame {inJar: true})
+    WITH collect(DISTINCT f.className + '.' + f.method) AS failing
+    MATCH (h:Heap {name: 'current'})-[:RETAINS]->(c:HeapClass)-[:COMPILED_AS]->(t:JavaType)-[:DECLARES_FIELD]->(fld:JavaField)-[:ACCESSED_BY]->(a:JavaFieldAccess {access: 'WRITE'})
+    WITH c, fld, a, failing, split(a.method, '(')[0] AS writer
+    RETURN c.className AS retainer, c.instances AS instances, c.retainedBytes AS retained, fld.name AS field, fld.type AS type,
+           writer, a.lines AS lines, writer IN failing AS inLoggedFailure
+    ORDER BY retained DESC, field, writer
+
+- name: JheapoFailingCodeOnLiveStacks
+  description: >-
+    The threads in the current heap dump whose stacks are in a method a logged failure ran through:
+    the code that failed before, running when the dump was taken. Empty when no thread was there.
+  cypher: |
+    MATCH (me:AssistantUser)-[:HAS_LOG_EVENT]->(e:LogEvent {hasTrace: true})-[:HAS_FRAME]->(f:JavaStackFrame {inJar: true})
+    WITH collect(DISTINCT f.className + '.' + f.method) AS failing, collect(DISTINCT f.className + '.' + f.method + ' <- ' + e.rootCause) AS causes
+    MATCH (h:Heap {name: 'current'})-[:HAS_THREAD]->(t:HeapThread)-[:HAS_FRAME]->(hf:HeapStackFrame)
+    WHERE hf.className + '.' + hf.method IN failing
+    RETURN t.name AS thread, t.state AS state, hf.frame AS frame, hf.className + '.' + hf.method AS method, hf.line AS line,
+           [c IN causes WHERE c STARTS WITH hf.className + '.' + hf.method + ' <- ' | split(c, ' <- ')[1]] AS failedWith
+    ORDER BY thread, frame

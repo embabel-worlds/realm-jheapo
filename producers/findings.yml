@@ -1,0 +1,153 @@
+# jheapo's own analyses, read from its tabs: waste, duplicate strings, collections, threads and
+# their stacks, class loaders, humongous arrays, entanglement, finalization. Each is a whole-heap
+# read from the Heap anchor (one call), except a thread's frames, batched by thread.
+#
+# Frames carry a spanKey for the hardcoded jar (jars/jheapo-0.1.0-SNAPSHOT.jar), so a stack frame reaches the exact source line
+# it was executing — through this realm's own source producers, which find the jar's -sources.jar
+# beside it.
+
+- name: heapWasteFindings
+  kind: remote
+  operation: getTab
+  keyArgs: [heap]
+  args: { tab: waste }
+  echoKeyAs: heapKey
+  records: "$.findings[*]"
+  pushdown: []
+  project: { findingId: id, headline: headline, bytes: bytes, recovery: recovery, recoveryMeaning: recoveryMeaning,
+             confidence: confidence, vector: vector, reachesCode: reachesCode, remedy: remedy, extent: extent }
+
+- name: heapDuplicateStrings
+  kind: remote
+  operation: getTab
+  keyArgs: [heap]
+  args: { tab: strings }
+  echoKeyAs: heapKey
+  records: "$.groups[*]"
+  pushdown: []
+  compute:
+    id: "toString(r.wasted) + ':' + toString(r.count) + ':' + r.sample"
+
+- name: heapStringHolders
+  kind: remote
+  operation: getTab
+  keyArgs: [heap]
+  args: { tab: strings }
+  echoKeyAs: heapKey
+  records: "$.referrers[*]"
+  pushdown: []
+
+- name: heapEmptyCollections
+  kind: remote
+  operation: getTab
+  keyArgs: [heap]
+  args: { tab: collections }
+  echoKeyAs: heapKey
+  records: "$.empty[*]"
+  pushdown: []
+  compute:
+    id: "'empty:' + r.classId"
+    shape: "'empty'"
+
+- name: heapSingletonCollections
+  kind: remote
+  operation: getTab
+  keyArgs: [heap]
+  args: { tab: collections }
+  echoKeyAs: heapKey
+  records: "$.singleton[*]"
+  pushdown: []
+  compute:
+    id: "'singleton:' + r.classId"
+    shape: "'singleton'"
+
+- name: heapNestedCollections
+  kind: remote
+  operation: getTab
+  keyArgs: [heap]
+  args: { tab: collectionsOfCollections }
+  echoKeyAs: heapKey
+  records: "$.rows[*]"
+  pushdown: []
+  compute:
+    id: "r.holderClass + '.' + r.field + ':' + r.collectionClass + '>' + r.storedClass"
+    fieldKey: "r.holderClass + '.' + r.field"
+    javaFieldId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.holderClass + '.' + r.field"
+
+- name: heapThreads
+  kind: remote
+  operation: getTab
+  keyArgs: [heap]
+  args: { tab: threads }
+  echoKeyAs: heapKey
+  records: "$.threads[*]"
+  pushdown: []
+  project: { oid: oid, name: name, daemon: daemon, priority: priority, state: state, tid: tid,
+             frameCount: frameCount, localCount: localCount, shallowSize: shallowSize }
+
+- name: threadFrames
+  kind: remote
+  operation: batchFrames
+  keyArg: oids
+  maxKeysPerCall: 100
+  records: "$[*]"
+  pushdown:
+    - { property: className,   op: EQUALS, argPath: className, clause: ["{value}"] }
+    - { property: className,   op: IN,     argPath: className, clause: "{values}" }
+    - { property: packageName, op: EQUALS, argPath: package,   clause: ["{value}"] }
+    - { property: packageName, op: IN,     argPath: package,   clause: "{values}" }
+  compute:
+    id: "r.forKey + '#' + toString(r.frame)"
+    # Only jheapo's own frames are the jar's: a JDK frame names no jar, as a stack trace's does.
+    javaTypeId: "CASE WHEN r.className STARTS WITH 'com.kodewerk.jheapo.' THEN 'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.className END"
+    spanKey: "CASE WHEN r.className STARTS WITH 'com.kodewerk.jheapo.' AND r.line > 0 AND r.sourcePath IS NOT NULL THEN 'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.sourcePath + '#' + toString(r.line) + '#' + r.method END"
+
+- name: heapClassLoaderGroups
+  kind: remote
+  operation: getTab
+  keyArgs: [heap]
+  args: { tab: classloaderDetail }
+  echoKeyAs: heapKey
+  records: "$.groups[*]"
+  pushdown: []
+  compute:
+    id: "r.type + ':' + r.state"
+
+- name: heapHumongousArrays
+  kind: remote
+  operation: getTab
+  keyArgs: [heap]
+  args: { tab: humongous }
+  echoKeyAs: heapKey
+  records: "$[*]"
+  pushdown: []
+  compute:
+    id: "r.ownerClassName + ':' + r.arrayClassName"
+    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.ownerClassName"
+
+- name: heapEntanglement
+  kind: remote
+  operation: getTab
+  keyArgs: [heap]
+  args: { tab: entanglement }
+  echoKeyAs: heapKey
+  records: "$.classes[*]"
+  pushdown: []
+  compute:
+    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.name"
+
+- name: heapFinalization
+  kind: remote
+  operation: getTab
+  keyArgs: [heap]
+  args: { tab: finalization }
+  echoKeyAs: heapKey
+  records: "$"
+  pushdown: []
+  project: { pending: pending, registered: registered, finalized: finalized, total: total,
+             finalizersRegistered: finalizersRegistered, cleanupActions: cleanupActions }
+
+# ── The source of a stack frame, read from the jar's -sources.jar beside it ────────────────────
+
+- { name: heapSourceSpan,     kind: source, emit: spans,        roots: [src], context: 4 }
+- { name: heapDeclarationAt,  kind: source, emit: declarations, roots: [src] }

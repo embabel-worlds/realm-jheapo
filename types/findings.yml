@@ -1,0 +1,198 @@
+# jheapo's analyses as nodes, from the Heap anchor, and a thread's stack frames joined to the code
+# they were executing. See producers/findings.yml.
+
+- name: HeapWasteFinding
+  description: "One kind of waste jheapo measured: what it is (headline), how many bytes, how it can be recovered (recovery, remedy), how sure (confidence), the class it points at (vector) and whether that reaches the application's code."
+  properties:
+    findingId: { identity: true, description: "jheapo's id for the finding, e.g. collection-capacity." }
+    headline: "What the waste is."
+    bytes: { type: int, description: "Bytes it accounts for." }
+    recovery: "How it is recovered: tune, refactor, …"
+    recoveryMeaning: "What that recovery means."
+    confidence: "MEASURED or ESTIMATED."
+    vector: "The class the finding points at."
+    reachesCode: { type: boolean, description: "The vector is a class of the application." }
+    remedy: "What to do."
+    extent: { cardinality: LIST, description: "Every class the finding covers." }
+  virtualJoins:
+    - { anchorLabel: Heap, relationship: HAS_WASTE, keyField: name, recordKeyField: heapKey, producer: heapWasteFindings,
+        description: "Every kind of waste jheapo measured, with bytes and remedy." }
+
+- name: HeapDuplicateString
+  description: "A string value held in many copies: how many, the bytes wasted, and the value (sample)."
+  properties:
+    id: { identity: true, description: "Wasted bytes, count and value." }
+    count: { type: int, description: "Copies." }
+    wasted: { type: int, description: "Bytes the extra copies waste." }
+    sample: "The value."
+  virtualJoins:
+    - { anchorLabel: Heap, relationship: DUPLICATE_STRING, keyField: name, recordKeyField: heapKey, producer: heapDuplicateStrings,
+        description: "The most wasteful duplicated string values." }
+
+- name: HeapStringHolder
+  description: "Where duplicated strings are held: a class or field (name) holding many strings, with how many distinct values among them - few distinct values in many objects is an interning or caching opportunity."
+  properties:
+    name: { identity: true, description: "The holding class, or field as Owner.field." }
+    rank: { type: int, description: "Rank by memory." }
+    objects: { type: int, description: "Strings held." }
+    memoryBytes: { type: int, description: "Bytes those strings take." }
+    overheadBytes: { type: int, description: "Bytes of that which duplication wastes." }
+    distinctValues: { type: int, description: "Distinct values among them." }
+  virtualJoins:
+    - { anchorLabel: Heap, relationship: STRINGS_HELD_BY, keyField: name, recordKeyField: heapKey, producer: heapStringHolders,
+        description: "Who holds the strings, ranked by memory." }
+
+- name: HeapIdleCollection
+  description: "Collections allocated but empty, or holding one element: shape is `empty` or `singleton`; count of them and the bytes they take."
+  properties:
+    id: { identity: true, description: "Shape and class id." }
+    classId: "The collection class's id."
+    className: "The collection class."
+    shape: "`empty` or `singleton`."
+    count: { type: int, description: "How many there are." }
+    shallowBytes: { type: int, description: "Bytes they take." }
+  virtualJoins:
+    - { anchorLabel: Heap, relationship: EMPTY_COLLECTION, keyField: name, recordKeyField: heapKey, producer: heapEmptyCollections,
+        description: "Empty collections, by class." }
+    - { anchorLabel: Heap, relationship: SINGLETON_COLLECTION, keyField: name, recordKeyField: heapKey, producer: heapSingletonCollections,
+        description: "Single-element collections, by class." }
+
+- name: HeapNestedCollection
+  description: "A collection of collections held by a field: the holder class and field (fieldKey = JavaField.key), whether static, the outer and inner collection classes and how many inner ones. Nested collections held statically are a classic unbounded growth."
+  properties:
+    id: { identity: true, description: "Field and the two classes." }
+    holderClass: "The class whose field holds the outer collection."
+    field: "The field's name."
+    fieldKey: "Owner.field. Equals JavaField.key."
+    inStatic: { type: boolean, description: "Held from a static field." }
+    collectionClass: "The outer collection."
+    storedClass: "The collections stored in it."
+    references: { type: int, description: "How many inner collections." }
+    javaFieldId: "Key of the field in the application's jar."
+  virtualJoins:
+    - { anchorLabel: Heap, relationship: NESTED_COLLECTION, keyField: name, recordKeyField: heapKey, producer: heapNestedCollections,
+        description: "Collections of collections and the fields that hold them." }
+
+- name: HeapThread
+  description: "A thread in the dump: name, state, daemon, how deep its stack. Its frames: HAS_FRAME."
+  properties:
+    oid: { identity: true, description: "The thread object's id." }
+    name: "Thread name."
+    daemon: { type: boolean, description: "A daemon thread." }
+    priority: { type: int, description: "Priority." }
+    state: "RUNNABLE, BLOCKED, WAITING, TIMED_WAITING, …"
+    tid: { type: int, description: "Thread id." }
+    frameCount: { type: int, description: "Frames on its stack." }
+    localCount: { type: int, description: "Objects its frames hold locally." }
+    shallowSize: { type: int, description: "Shallow bytes of the thread object." }
+  virtualJoins:
+    - { anchorLabel: Heap, relationship: HAS_THREAD, keyField: name, recordKeyField: heapKey, producer: heapThreads,
+        description: "Every thread in the dump." }
+
+- name: HeapStackFrame
+  description: "One frame of a thread's stack, innermost first (frame 0): the class, method, file and line it was executing. When the application's jar compiled the class: COMPILED_AS, the source line SOURCE_AT, the whole method DECLARED_AT."
+  properties:
+    id: { identity: true, description: "Thread oid and frame number." }
+    frame: { type: int, description: "Position, 0 innermost." }
+    label: "The frame as the dump writes it."
+    className: "The class."
+    packageName: "Its package."
+    method: "The method."
+    file: "The source file the frame names."
+    line: { type: int, description: "The line; -1 when the dump does not say (native, unknown)." }
+    sourcePath: "Where the file sits in a source root."
+    locals: { type: int, description: "Objects this frame holds." }
+    threadName: "The thread's name."
+    threadState: "The thread's state."
+    forKey: "The thread's oid."
+    javaTypeId: "Key of the class in the application's jar."
+    spanKey: "Key of the source line in the application's jar."
+  virtualJoins:
+    - { anchorLabel: HeapThread, relationship: HAS_FRAME, keyField: oid, recordKeyField: forKey, producer: threadFrames,
+        description: "A thread's stack. Batched across threads; narrow with `{packageName: '…'}` to the application's frames." }
+
+- name: HeapClassLoaderGroup
+  description: "Class loaders by type and state: how many, how many define classes, how many are unreachable - an unreachable loader still defining classes is the classic redeploy leak."
+  properties:
+    id: { identity: true, description: "Type and state." }
+    type: "The loader class."
+    state: "Its state."
+    instances: { type: int, description: "Loaders of this type and state." }
+    withClasses: { type: int, description: "Of them, how many define classes." }
+    classesDefined: { type: int, description: "Classes they define." }
+    unreachable: { type: int, description: "Unreachable loaders." }
+    classesPerLoader: { type: int, description: "Classes per loader." }
+  virtualJoins:
+    - { anchorLabel: Heap, relationship: HAS_CLASS_LOADERS, keyField: name, recordKeyField: heapKey, producer: heapClassLoaderGroups,
+        description: "Class loaders, grouped." }
+
+- name: HeapHumongousArray
+  description: "Arrays large enough to be G1 humongous objects, by owning class: their bytes, the region footprint they take, and the bytes that footprint wastes."
+  properties:
+    id: { identity: true, description: "Owner and array class." }
+    ownerClassName: "The class holding the arrays."
+    arrayClassName: "The array class."
+    instances: { type: int, description: "Arrays." }
+    regionSize: { type: int, description: "The G1 region size." }
+    totalTrueBytes: { type: int, description: "Bytes the arrays need." }
+    totalFootprintBytes: { type: int, description: "Bytes the regions they occupy take." }
+    totalWastedBytes: { type: int, description: "The difference." }
+    sampleArrayOid: "One of the arrays."
+    javaTypeId: "Key of the owner in the application's jar."
+  virtualJoins:
+    - { anchorLabel: Heap, relationship: HUMONGOUS, keyField: name, recordKeyField: heapKey, producer: heapHumongousArrays,
+        description: "Humongous arrays and what they waste." }
+
+- name: HeapEntanglement
+  description: "Classes whose instances are entangled - reachable only through each other - with the bytes held that way: what one fix would release together."
+  properties:
+    name: { identity: true, description: "The class." }
+    classId: { type: int, description: "Its id." }
+    instances: { type: int, description: "Instances." }
+    entangled: { type: int, description: "Entangled instances." }
+    entPct: { type: float, description: "Share entangled, percent." }
+    shallow: { type: int, description: "Shallow bytes." }
+    entangledBytes: { type: int, description: "Bytes held through the entanglement." }
+    javaTypeId: "Key of the class in the application's jar."
+  virtualJoins:
+    - { anchorLabel: Heap, relationship: ENTANGLED, keyField: name, recordKeyField: heapKey, producer: heapEntanglement,
+        description: "The most entangled classes." }
+
+- name: HeapFinalization
+  description: "Finalization: objects pending, registered and finalized, finalizers and cleaners registered. A pending backlog means the finalizer thread is behind."
+  properties:
+    heapKey: { identity: true, description: "The Heap anchor's name." }
+    pending: { type: int, description: "Awaiting finalization." }
+    registered: { type: int, description: "Registered for finalization." }
+    finalized: { type: int, description: "Finalized." }
+    total: { type: int, description: "All finalizable." }
+    finalizersRegistered: { type: int, description: "Finalizers registered." }
+    cleanupActions: { type: int, description: "Cleaner actions." }
+  virtualJoins:
+    - { anchorLabel: Heap, relationship: HAS_FINALIZATION, keyField: name, recordKeyField: heapKey, producer: heapFinalization,
+        description: "The finalization summary." }
+
+# Joins into the jar and source realms, keyed on what the rows above compute.
+- name: JavaType
+  virtualJoins:
+    - { anchorLabel: HeapStackFrame, relationship: COMPILED_AS, keyField: javaTypeId, recordKeyField: anchorKey, producer: heapJavaTypeByName,
+        description: "The frame's class, compiled in the application's jar." }
+    - { anchorLabel: HeapHumongousArray, relationship: COMPILED_AS, keyField: javaTypeId, recordKeyField: anchorKey, producer: heapJavaTypeByName,
+        description: "The class holding the humongous arrays." }
+    - { anchorLabel: HeapEntanglement, relationship: COMPILED_AS, keyField: javaTypeId, recordKeyField: anchorKey, producer: heapJavaTypeByName,
+        description: "The entangled class, compiled." }
+
+- name: JavaField
+  virtualJoins:
+    - { anchorLabel: HeapNestedCollection, relationship: HELD_IN, keyField: javaFieldId, recordKeyField: anchorKey, producer: heapJavaFieldByKey,
+        description: "The field holding the nested collection, as the jar declares it." }
+
+- name: SourceSpan
+  virtualJoins:
+    - { anchorLabel: HeapStackFrame, relationship: SOURCE_AT, keyField: spanKey, recordKeyField: anchorKey, producer: heapSourceSpan,
+        description: "The source lines around the line the frame was executing." }
+
+- name: JavaDeclaration
+  virtualJoins:
+    - { anchorLabel: HeapStackFrame, relationship: DECLARED_AT, keyField: spanKey, recordKeyField: anchorKey, producer: heapDeclarationAt,
+        description: "The whole method the frame was in." }

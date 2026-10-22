@@ -1,0 +1,8 @@
+# jheapo's REST interface, vendored (the spec is ours: jheapo publishes none). It reaches the
+# jheapo running on the appliance's host — `bin/jheapo-rest.sh <dump.hprof>` serves it on 7071 —
+# from inside the appliance's container, hence host.docker.internal. Change `servers` in
+# jheapo.yaml for a jheapo elsewhere.
+- url: jheapo.yaml
+  name: jheapo
+  type: openapi
+  auth: none
