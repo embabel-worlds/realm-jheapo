@@ -16,16 +16,15 @@ and the jar and its source answering the code half.
 Everything below was run against a dump of jheapo analysing itself, so the queries name jheapo's
 own classes. Point it at your own dump and they answer for that instead.
 
-**Status, 23 October 2026.** Two pieces this needs are merged but not yet in a published appliance
-image, and one is still a pull request:
+**Status, 23 October 2026.** Two pieces this needs are still pull requests:
 
 | Needs | Where | Without it |
 |---|---|---|
 | jheapo's REST interface | `rest-api` branch, [jheapo#3](https://github.com/jheapo/jheapo/pull/3) | nothing to read the heap from |
 | class names allowed through governance | [embabel/me#2982](https://github.com/embabel/me/pull/2982) | `className` is withheld (it contains `ssn`, which the secret-field rule took for a social security number), so every heap → code join answers nothing |
-| method line tables | [embabel/me#3025](https://github.com/embabel/me/pull/3025) | only matters for the stack-frame joins in realm-jvm-logs |
 
-Until those are released, ask Rod for an image with them in.
+Until #2982 is released, ask Rod for an image with it in. (Method line tables, which let a stack
+frame find the exact overload it ran in, are released: embabel/me#3025.)
 
 ### 1. The appliance
 
