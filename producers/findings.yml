@@ -143,5 +143,5 @@
 # ── The source of a stack frame: the jar's -sources.jar beside it, else the roots ──────────────
 # The same roots realm-java-source-code reads, under the world's data/ tree.
 
-- { name: heapSourceSpan,     kind: source, emit: spans,        roots: [data/sources, src], context: 4 }
-- { name: heapDeclarationAt,  kind: source, emit: declarations, roots: [data/sources, src] }
+- { name: heapSourceSpan,     kind: source-tree, from: jar, emit: spans,        roots: [data/sources, src], context: 4 }
+- { name: heapDeclarationAt,  kind: source-tree, from: jar, emit: declarations, roots: [data/sources, src] }
