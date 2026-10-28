@@ -114,6 +114,28 @@ quick for an application's jar. For a large library jar it is seconds, and a que
 `ACCESSED_BY` can hit realm-java-code's 5,000-record fan-out cap and be refused. Point `jar` at the
 application's own code, not its dependencies.
 
+## Leaks: a carrier, a center and its drag
+
+A leak has three parts. The **carrier** is a collection (a map, list or array, often nested) that
+keeps gaining entries. The **center** is what it carries, usually one of the application's domain
+objects. The **drag** is what the center's fields keep alive. The center is the finding that
+matters: the question is its lifecycle, and where that lifecycle breaks.
+
+- `HeapLeakShape(jar, samples)`: each center with its carrier and drag. It reads the carrier off
+  sampled paths to a GC root: the owner, the carrier field, and the chain of collections between
+  them.
+- `HeapCenterLifecycle(jar, center, carrier)`: the center's lifecycle from the jar. It covers born
+  (every `new` of it), construction (what its constructors call), enrolled (each put or add given
+  one, and growth of the carrier field) and released (each remove, clear or poll, and any
+  reassignment of the carrier field).
+- The `heap-leaks` lens (`jar`, `centers`) runs the first, then the second for each center. From
+  their rows it writes a verdict: whether the center enrolls itself during construction, and
+  whether any release path exists. No model is involved. Heap Lens shows it as the **Leaks** tab.
+
+A lens is not runnable from the console or from MCP yet. Run the two views in the Query Studio,
+open the Leaks tab, or call `POST /api/v1/lenses/heap-leaks/invoke` with
+`{"args": {"jar": "jars/app.jar"}}`.
+
 ## What is worrying, and the code behind it
 
 Two views put the findings in one list and take each to its code:
@@ -286,10 +308,12 @@ code takes `jar` (empty: the heap alone):
 - `views/app.yml`: what `apps/heap-lens.html` calls. Histogram, retainers, leak suspects, and for a
   class its instances, holders, fields, path, source and growth.
 - `views/concerns.yml`: `HeapConcerns` and `HeapConcernCode`, above.
+- `views/leaks.yml`: `HeapLeakShape` and `HeapCenterLifecycle`, above.
 - `views/logs.yml`: with realm-jvm-logs, the retainers whose writers appear in logged failures, and
   failing code on live thread stacks.
 
 The `heap-takeaways` lens reads the views and has a model write up the dump. It takes `jar` too.
+The `heap-leaks` lens composes the two leak views into one report per center, with a verdict.
 
 ## Files
 
