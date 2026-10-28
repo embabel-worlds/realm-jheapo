@@ -39,22 +39,21 @@ To work on a realm instead, clone it into the folder `embabel realms link` point
 it by reference with `install_realm_from_path("realm-jheapo")`. Then a `realm_refresh()` picks up
 every edit. See [Contributing](#contributing).
 
-### 3. The application's jar and its source
+### 3. The application's code
 
-The code half reads a jar and its `-sources.jar` from your world's `data/jars`. Put them side by
-side, with the sources named `<jar name>-sources.jar`:
+The code half reads one jar of the application's classes, with its sources beside it as
+`<name>-sources.jar`, from the world's `data/jars`. `bin/stage-app` builds both and puts them there:
 
 ```bash
-D=/data/embabel/assistant/users/<you>/default/data/jars     # <you>: your appliance user
-docker exec embabel-appliance-worlds-1 mkdir -p $D
-docker cp app.jar         embabel-appliance-worlds-1:$D/
-docker cp app-sources.jar embabel-appliance-worlds-1:$D/
+bin/stage-app path/to/app.war   path/to/src/main/java          # a WAR
+bin/stage-app path/to/webapp    path/to/src          myapp     # an exploded WAR (WEB-INF/classes)
+bin/stage-app target/classes    src/main/java        myapp     # a build's classes folder, or a .jar
 ```
 
-Then pass `jar: 'jars/app.jar'` to the views. A multi-module build is one jar: copy each module's
-`target/classes` into one folder and `jar` it, and do the same with `src/main/java` for the
-sources. Without a `-sources.jar` beside it, the source is looked for under `data/sources` and
-`data/src`. Logs for realm-jvm-logs go in `data/logs`, the same way.
+It takes only the application's own classes (`WEB-INF/classes`, never `WEB-INF/lib`), checks that
+the source folder is the package root, and prints the value to use: `jar: "jars/myapp.jar"`.
+A multi-module build: copy each module's classes into one folder first. Logs for realm-jvm-logs go
+in `data/logs`.
 
 ### 4. A dump to read
 
@@ -114,6 +113,20 @@ hops after it (`ACCESSED_BY`, `SOURCE_AT`) fetch for each, before the key narrow
 quick for an application's jar. For a large library jar it is seconds, and a query that goes on to
 `ACCESSED_BY` can hit realm-java-code's 5,000-record fan-out cap and be refused. Point `jar` at the
 application's own code, not its dependencies.
+
+## What is worrying, and the code behind it
+
+Two views put the findings in one list and take each to its code:
+
+- `HeapConcerns` (`jar`, `minBytes`, default 1 MB): every worrying finding ranked by bytes. That
+  covers wasted bytes jheapo measured, duplicated strings and the field holding them, humongous
+  arrays, and leak suspects pinned by a static field. Each row names the subject (a class, or a
+  field as `Owner.field`), whether it is `inApp`, and the remedy.
+- `HeapConcernCode` (`jar`, `subject`): for a field, its declaration and every read and write with
+  the source around each; for a class, every declaration in its source file.
+
+`HeapAppFieldGrowth` then shows where a field grows: each `put`/`add` on a line that also reads the
+field. Heap Lens shows the list as its **Concerns** tab, and a row opens its subject's code.
 
 ## Queries, and what each one does
 
@@ -272,6 +285,7 @@ code takes `jar` (empty: the heap alone):
   finalization.
 - `views/app.yml`: what `apps/heap-lens.html` calls. Histogram, retainers, leak suspects, and for a
   class its instances, holders, fields, path, source and growth.
+- `views/concerns.yml`: `HeapConcerns` and `HeapConcernCode`, above.
 - `views/logs.yml`: with realm-jvm-logs, the retainers whose writers appear in logged failures, and
   failing code on live thread stacks.
 

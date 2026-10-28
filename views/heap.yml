@@ -48,20 +48,26 @@
 
 - name: HeapFieldGrowthCode
   description: >-
-    For the fields holding a class's instances: each method that touches the field and adds to a
-    container in the same method, with the call as source writes it - where the holder grows.
+    For the fields holding a class's instances: each put or add made on a line that reads the
+    field, with that line as source writes it - where the holder grows.
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
     class: { type: string, description: "Binary class name of the objects held." }
+  # Same rule as HeapAppFieldGrowth: a put/add on a line that also reads the field.
   cypher: |
     OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (h:Heap {name: 'current'})-[:RETAINS]->(c:HeapClass {className: $class})-[:HAS_INSTANCE]->(o:HeapObject)
           -[:HELD_BY]->(hd:HeapHolder)
     WITH DISTINCT j, hd.field AS field
     MATCH (j)-[:HAS_FIELD]->(f:JavaField {key: field})
-    MATCH (f)-[:ACCESSED_BY]->(a:JavaFieldAccess)-[:SAME_METHOD_CALL]->(call:JavaMethodCall)-[:AT_SITE]->(cs:JavaCallSite)
-    WHERE call.calleeName IN ['put', 'putIfAbsent', 'computeIfAbsent', 'merge', 'add', 'addAll', 'offer', 'push']
-    RETURN field, a.method AS method, cs.line AS line, cs.text AS code, cs.argumentTypes AS argumentTypes
+    MATCH (f)-[:ACCESSED_BY]->(a:JavaFieldAccess {access: 'READ'})-[:SAME_METHOD_CALL]->(call:JavaMethodCall)
+    WHERE call.calleeName IN ['put', 'putIfAbsent', 'computeIfAbsent', 'compute', 'merge', 'add', 'addAll', 'putAll', 'offer', 'push']
+    UNWIND [l IN call.lines WHERE l IN a.lines] AS line
+    WITH field, a, call, line, $jar + '!' + a.sourcePath + '#' + toString(line) + '#' + call.calleeName AS lineKey
+    OPTIONAL MATCH (sl:SourceLine {key: lineKey})-[:SOURCE_AT]->(s:SourceSpan)
+    WITH field, a, call, line, head([x IN split(s.text, '\n') WHERE x STARTS WITH toString(line) + ':']) AS at
+    RETURN DISTINCT field, a.method AS method, line, call.calleeOwner + '.' + call.calleeName AS grows,
+           CASE WHEN at IS NULL THEN null ELSE trim(substring(at, size(toString(line)) + 1)) END AS code
     ORDER BY field, line
 
 - name: HeapLeakPathInCode

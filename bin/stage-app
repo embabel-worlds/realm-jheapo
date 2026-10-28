@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Put an application's own code into a world, the way realm-java-code and realm-java-source-code
+# read it: one jar of its classes and, beside it, `<name>-sources.jar`.
+#
+#   bin/stage-app <app> <source-root> [name]
+#
+#   <app>          a .war, an exploded WAR (a folder with WEB-INF/classes), a .jar, or a folder
+#                  of classes (target/classes)
+#   <source-root>  the folder whose children are the packages (the one holding com/, org/, …)
+#   [name]         what to call it; defaults to the WAR, jar or folder's name
+#
+# Prints the `jar` value to give the views and Heap Lens.
+#
+# WHY THIS EXISTS: the appliance's jar reader takes only a .jar, and a WAR is not one - its own
+# classes sit in WEB-INF/classes beside its libraries in WEB-INF/lib. Only WEB-INF/classes is
+# staged: libraries in the jar would count as "your code" and make every hop that reads the
+# whole jar slower. And the world's data/ is only reachable with `docker cp`, into a path that
+# names the user. Both belong in the appliance; until they are, this is the one command.
+set -euo pipefail
+
+die() { echo "stage-app: $*" >&2; exit 1; }
+[ $# -ge 2 ] || die "usage: bin/stage-app <war|classes-dir|jar> <source-root> [name]"
+command -v jar >/dev/null || die "needs the JDK's jar tool on the PATH"
+command -v docker >/dev/null || die "needs docker"
+
+app=${1%/}; src=${2%/}
+[ -e "$app" ] || die "no such file or folder: $app"
+[ -d "$src" ] || die "no such source folder: $src"
+
+# The name defaults to what the app is called, so a second application gets its own jar
+# rather than replacing the first.
+name=${3:-$(basename "$app")}
+name=${name%.war}; name=${name%.jar}
+[[ $name =~ ^[A-Za-z0-9._-]+$ ]] || die "name '$name': letters, digits, . _ - only"
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+# ── The classes ─────────────────────────────────────────────────────────────────────────────
+case "$app" in
+  *.war)
+    (cd "$work" && unzip -q "$(cd "$(dirname "$app")" && pwd)/$(basename "$app")" 'WEB-INF/classes/*') \
+      || die "$app has no WEB-INF/classes"
+    classes="$work/WEB-INF/classes" ;;
+  *.jar)
+    classes="" ; cp "$app" "$work/$name.jar" ;;
+  *)
+    if [ -d "$app/WEB-INF/classes" ]; then classes="$app/WEB-INF/classes"; else classes="$app"; fi ;;
+esac
+if [ -n "${classes:-}" ]; then
+  n=$(find "$classes" -name '*.class' | wc -l | tr -d ' ')
+  [ "$n" -gt 0 ] || die "no .class files under $classes"
+  jar cf "$work/$name.jar" -C "$classes" .
+  echo "  classes: $n from $classes"
+fi
+
+# ── The sources, named so the source reader finds them beside the jar with no configuration ─
+n=$(find "$src" -name '*.java' -o -name '*.kt' -o -name '*.scala' -o -name '*.groovy' | wc -l | tr -d ' ')
+[ "$n" -gt 0 ] || die "no source files under $src"
+first=$(find "$src" -name '*.java' | head -1)
+if [ -n "$first" ]; then
+  # A root one level too high or too low is the commonest mistake, and it fails silently later
+  # as "no source found": check that a file's package matches where it sits under the root.
+  # tr: sources written on Windows end each line in CR, which would ride along in the name.
+  pkg=$(tr -d '\r' < "$first" | sed -n 's/^[[:space:]]*package[[:space:]]\{1,\}\([A-Za-z0-9_.]*\)[[:space:]]*;.*/\1/p' | head -1)
+  rel=$(dirname "${first#"$src"/}")
+  if [ -n "$pkg" ] && [ "$(printf %s "$pkg" | tr . /)" != "$rel" ]; then
+    die "$src is not the source root: $first declares package $pkg but sits in $rel"
+  fi
+fi
+jar cf "$work/$name-sources.jar" -C "$src" .
+echo "  sources: $n from $src"
+
+# ── Into the world ──────────────────────────────────────────────────────────────────────────
+container=${EMBABEL_CONTAINER:-$(docker ps --format '{{.Names}}' | grep -E -- '-worlds-1$' | head -1 || true)}
+[ -n "$container" ] || die "no running Worlds appliance found (set EMBABEL_CONTAINER)"
+data=$(docker exec "$container" sh -c 'ls -d /data/embabel/assistant/users/*/default/data 2>/dev/null')
+[ "$(printf '%s\n' "$data" | grep -c .)" -eq 1 ] \
+  || die "expected one world's data folder in $container, found: ${data:-none}"
+docker exec "$container" mkdir -p "$data/jars"
+docker cp -q "$work/$name.jar"         "$container:$data/jars/"
+docker cp -q "$work/$name-sources.jar" "$container:$data/jars/"
+
+echo
+echo "  Staged into $container. Use:  jar: \"jars/$name.jar\""

@@ -102,17 +102,26 @@
     ORDER BY access DESC, method
 
 - name: HeapAppFieldGrowth
-  description: "Where one field's container grows: each add or put made on the field, as source writes it, with what is passed."
+  description: "Where one field's container grows: each add or put made on a line that reads the field, as source writes it."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
     field: { type: string, description: "The field as Owner.field." }
+  # A grow site is a put/add on a LINE that also reads the field: adding to a collection held in a
+  # field is a getfield and a call on what it read, on the same line. Not the call site's receiver:
+  # one call row covers every same-named call in a method, and its site is read at the first line
+  # only - so `arr.put(..)` at 62 hid `AllKeywords.put(..)` at 63, the line that grew a 1 GB map.
   cypher: |
     OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (j)-[:HAS_FIELD]->(f:JavaField {key: $field})
-    MATCH (f)-[:ACCESSED_BY]->(a:JavaFieldAccess)-[:SAME_METHOD_CALL]->(call:JavaMethodCall)-[:AT_SITE]->(cs:JavaCallSite)
-    WHERE call.calleeName IN ['put', 'putIfAbsent', 'computeIfAbsent', 'compute', 'merge', 'add', 'addAll', 'offer', 'push', 'set']
-      AND (cs.receiver = f.name OR cs.receiver = 'this.' + f.name)
-    RETURN DISTINCT a.method AS method, cs.line AS line, cs.text AS code, cs.argumentTypes AS argumentTypes, cs.url AS url
+    MATCH (f)-[:ACCESSED_BY]->(a:JavaFieldAccess {access: 'READ'})-[:SAME_METHOD_CALL]->(call:JavaMethodCall)
+    WHERE call.calleeName IN ['put', 'putIfAbsent', 'computeIfAbsent', 'compute', 'merge', 'add', 'addAll', 'putAll', 'offer', 'push']
+    UNWIND [l IN call.lines WHERE l IN a.lines] AS line
+    WITH a, call, line, $jar + '!' + a.sourcePath + '#' + toString(line) + '#' + call.calleeName AS lineKey
+    OPTIONAL MATCH (sl:SourceLine {key: lineKey})-[:SOURCE_AT]->(s:SourceSpan)
+    WITH a, call, line, s, head([x IN split(s.text, '\n') WHERE x STARTS WITH toString(line) + ':']) AS at
+    RETURN DISTINCT a.method AS method, line, call.calleeOwner + '.' + call.calleeName AS grows,
+           CASE WHEN at IS NULL THEN null ELSE trim(substring(at, size(toString(line)) + 1)) END AS code,
+           null AS argumentTypes, s.url AS url
     ORDER BY line
 
 - name: HeapAppClassSource

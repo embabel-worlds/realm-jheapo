@@ -1,0 +1,85 @@
+# Concerns: what is worrying in this heap, ranked by bytes, each tied to the class or field that
+# causes it - and, for one of them, the code behind it. The findings views say what is wrong one
+# kind at a time; these put them in one list a person can work down, and name the subject the way
+# the jar does, so the next step is always the code.
+#
+# A subject is a class (`JavaType.name`) or a field (`JavaField.key`, `Owner.field`). `kind` says
+# which when the jar has it; `inApp` says the jar compiled it - the concerns your code can fix.
+#
+# One CALL over a UNION, so the whole list sorts. Inside it each branch names its own variables
+# (Virtual Cypher scopes a subquery's branches by name) and imports `j`, the jar pinned once, first.
+
+- name: HeapConcerns
+  description: "Everything worrying in the heap, largest first: wasted bytes jheapo measured, duplicated strings and the field holding them, humongous arrays, and leak suspects pinned by a static field - each with the class or field responsible, whether it is the application's own (inApp), and what to do."
+  params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
+    minBytes: { type: int, default: 1048576, description: "Leave out concerns smaller than this many bytes." }
+  cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
+    CALL {
+      WITH j
+      MATCH (h1:Heap {name: 'current'})-[:HAS_WASTE]->(w:HeapWasteFinding)
+      WHERE w.vector IS NOT NULL AND w.recovery <> 'collected' AND w.bytes >= $minBytes
+      OPTIONAL MATCH (j)-[:HAS_TYPE]->(t1:JavaType {name: w.vector})
+      OPTIONAL MATCH (j)-[:HAS_FIELD]->(f1:JavaField {key: w.vector})
+      RETURN w.headline AS concern, 'waste' AS source, w.bytes AS bytes, w.vector AS subject,
+             CASE WHEN f1 IS NOT NULL THEN 'field' WHEN t1 IS NOT NULL THEN 'class' END AS kind,
+             t1 IS NOT NULL OR f1 IS NOT NULL AS inApp, w.confidence AS confidence, w.remedy AS remedy
+      UNION
+      WITH j
+      MATCH (h2:Heap {name: 'current'})-[:STRINGS_HELD_BY]->(s:HeapStringHolder)
+      WHERE s.overheadBytes >= $minBytes AND s.name CONTAINS '.' AND NOT s.name ENDS WITH '[]'
+      OPTIONAL MATCH (j)-[:HAS_FIELD]->(f2:JavaField {key: s.name})
+      RETURN 'Duplicated strings: ' + toString(s.objects) + ' held, ' + toString(s.distinctValues) + ' distinct' AS concern,
+             'strings' AS source, s.overheadBytes AS bytes, s.name AS subject, 'field' AS kind,
+             f2 IS NOT NULL AS inApp, 'MEASURED' AS confidence,
+             'Few distinct values in many objects: intern or cache them, or hold an enum or an id.' AS remedy
+      UNION
+      WITH j
+      MATCH (h3:Heap {name: 'current'})-[:HUMONGOUS]->(a:HeapHumongousArray)
+      WHERE a.totalWastedBytes >= $minBytes
+      WITH j, a, CASE WHEN a.ownerClassName STARTS WITH 'static ' THEN substring(a.ownerClassName, 7) ELSE a.ownerClassName END AS owner
+      OPTIONAL MATCH (j)-[:HAS_TYPE]->(t3:JavaType {name: owner})
+      RETURN 'Humongous arrays: ' + toString(a.instances) + ' x ' + a.arrayClassName AS concern,
+             'humongous' AS source, a.totalWastedBytes AS bytes, owner AS subject, 'class' AS kind,
+             t3 IS NOT NULL AS inApp, 'MEASURED' AS confidence,
+             'Each takes whole G1 regions and wastes the tail of the last: smaller arrays, or a larger -XX:G1HeapRegionSize.' AS remedy
+      UNION
+      WITH j
+      MATCH (h4:Heap {name: 'current'})-[:LEAK_SUSPECT]->(o:HeapObject)-[:HELD_BY]->(hd:HeapHolder)
+      WHERE o.retainedSize >= $minBytes AND any(x IN hd.through WHERE x STARTS WITH 'static ')
+      OPTIONAL MATCH (j)-[:HAS_FIELD]->(f4:JavaField {key: hd.field})
+      RETURN 'Leak suspect pinned by a static field: ' + o.className AS concern,
+             'static' AS source, o.retainedSize AS bytes, hd.field AS subject, 'field' AS kind,
+             f4 IS NOT NULL AS inApp, 'MEASURED' AS confidence,
+             'A static field lives as long as its class loader: bound what it holds, or evict from it.' AS remedy
+    }
+    RETURN concern, source, bytes, subject, kind, inApp, confidence, remedy
+    ORDER BY bytes DESC
+
+- name: HeapConcernCode
+  description: "The code behind one concern's subject, from the application's jar and source: for a field, how it is declared and every method that reads or writes it with the lines around each; for a class, every declaration in its source file."
+  params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/." }
+    subject: { type: string, description: "A concern's subject: a field as Owner.field, or a binary class name." }
+  cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
+    CALL {
+      WITH j
+      MATCH (j)-[:HAS_FIELD]->(f:JavaField {key: $subject})
+      OPTIONAL MATCH (f)-[:ACCESSED_BY]->(a:JavaFieldAccess)
+      OPTIONAL MATCH (a)-[:SOURCE_AT]->(s1:SourceSpan)
+      RETURN 'field' AS kind, f.genericType AS declaredAs, f.isStatic AS isStatic,
+             a.access AS what, a.method AS member, a.sourcePath AS file, a.firstLine AS line,
+             s1.matches AS matches, s1.text AS code
+      UNION
+      WITH j
+      MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: $subject})-[:DEFINED_IN]->(src:JavaSource)
+      OPTIONAL MATCH (src)-[:DECLARES]->(d:JavaDeclaration)
+      WHERE d.owner = t.name AND d.kind IN ['class', 'interface', 'enum', 'record', 'field', 'constructor', 'method']
+      RETURN 'class' AS kind, t.kind AS declaredAs, null AS isStatic,
+             d.kind AS what, d.name AS member, src.path AS file, d.fromLine AS line,
+             null AS matches, d.text AS code
+    }
+    RETURN kind, declaredAs, isStatic, what, member, file, line, matches, code
+    ORDER BY kind, line
