@@ -515,6 +515,18 @@
   function noRelease(l) { return !(l.lifecycle.released || []).some(function (r) { return r.takesCenter; }); }
   function selfEnrolls(l) { return (l.verdict || []).some(function (v) { return /enrolls itself/.test(v); }); }
   function leaksList(el) {
+    /* No jar yet: ask for it here, where the need is, rather than pointing at the box above. */
+    if (!state.jar) {
+      el.innerHTML = '<div class="pad"><div style="margin-bottom:8px">A leak\'s lifecycle is read from the application\'s code. Which jar?</div>' +
+        '<div class="jar" style="gap:8px"><input id="ljar" placeholder="jars/app.jar" spellcheck="false" autocomplete="off" style="flex:1">' +
+        '<button class="btn" id="lgo">Read leaks</button></div>' +
+        '<div class="muted" style="font-size:11.5px;margin-top:8px">The path under the world\'s <code>data/</code>, as <code>bin/stage-app</code> printed it. It is remembered, and the box at the top shows it.</div></div>';
+      var go = function () { var v = $('ljar').value.trim(); if (!v) return; $('jar').value = v; $('jar').onchange(); };
+      $('lgo').onclick = go;
+      $('ljar').onkeydown = function (e) { if (e.key === 'Enter') go(); };
+      $('ljar').focus();
+      return;
+    }
     if (!leaksRun) el.innerHTML = '<div class="empty"><span class="spin"></span>Finding each leak\'s carrier, center and drag, then reading every center\'s lifecycle from the jar…<div id="lprogress"></div></div>';
     leaks().then(function (out) {
       if (state.tab !== 'leaks') return;
