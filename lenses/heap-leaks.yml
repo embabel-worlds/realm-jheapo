@@ -1,0 +1,112 @@
+# LEAKS: each leak in the heap as a carrier, a center and its drag, and the center's lifecycle as
+# the application's code writes it - born, enrolled in the carrier, released - with a verdict on
+# where that lifecycle breaks. A lens rather than a view because it is a workflow over two views:
+# HeapLeakShape finds the centers in the heap, then HeapCenterLifecycle reads each one's lifecycle
+# from the jar. Both views stand alone (the Query Studio runs them); this composes them, and makes
+# the one judgement neither can: whether a center's lifecycle has an end.
+#
+# No model is asked anything. Every line of the verdict is derived from rows the views returned,
+# and names the rows it rests on, so it can be checked in the Query Studio.
+id: heap-leaks
+name: Heap leaks
+description: >-
+  Each leak in the analysed heap as a carrier (the collection holding it), a center (the object it
+  holds, usually the application's own) and the drag (what the center's fields keep alive), with the
+  center's lifecycle from the application's code - where it is born, how it joins the carrier, where
+  it is released - and whether that lifecycle has an end. "What is leaking", "why is X not collected".
+params:
+  - name: jar
+    type: STRING
+    label: The application's jar under the world's data/ (e.g. jars/app.jar)
+    required: true
+  - name: centers
+    type: INT
+    label: How many centers to read the lifecycle of, largest first (default 3)
+    required: false
+spec:
+  kind: cypherscript
+  script: |
+    const jar = String(lensArgs.jar || "");
+    const maxCenters = Math.max(1, Number(lensArgs.centers || 3));
+    const notes = [];
+
+    /* A view that fails is reported, not swallowed: an empty lifecycle because the view errored
+       would read as "never released", which is the one conclusion this lens must not fake. */
+    const run = async (name, params) => {
+      try {
+        const r = await gateway.view.run({ name, params: JSON.stringify(params) });
+        return { rows: (r && r.rows) || [], warnings: (r && r.warnings) || [], error: null };
+      } catch (e) {
+        return { rows: [], warnings: [], error: String((e && e.message) || e).slice(0, 400) };
+      }
+    };
+    const short = (n) => String(n || "").split("(")[0].split(".").slice(-2).join(".");
+    const simple = (n) => String(n || "").split(".").pop();
+    const at = (r) => (r.file ? r.file.split("/").pop() : "?") + ":" + r.line;
+
+    if (!jar) {
+      return { kind: "heap-leaks", jar, error: "A jar is required: the lifecycle is read from the application's code.", leaks: [] };
+    }
+
+    // ── 1. The shape: centers, their carriers and drag, from the heap ──
+    const shape = await run("HeapLeakShape", { jar });
+    if (shape.error) notes.push("HeapLeakShape failed: " + shape.error);
+
+    // One center can sit in several carriers (a row each); its lifecycle is read once.
+    const byCenter = new Map();
+    for (const r of shape.rows) {
+      if (!byCenter.has(r.center)) byCenter.set(r.center, { center: r.center, inApp: r.inApp, instances: r.instances,
+                                                            retainedBytes: r.retainedBytes, carriers: [], drag: r.drag || [] });
+      byCenter.get(r.center).carriers.push({ owner: r.carrierOwner, field: r.carrierField, chain: r.carrierChain,
+                                             samples: r.samplesInThisCarrier });
+    }
+    const centers = [...byCenter.values()].slice(0, maxCenters);
+    if (byCenter.size > centers.length) notes.push((byCenter.size - centers.length) + " smaller center(s) not read; raise `centers`.");
+
+    // ── 2. Each center's lifecycle, from the jar ──
+    const leaks = [];
+    for (const c of centers) {
+      const carrier = (c.carriers.find(k => k.field) || {}).field || "";
+      const life = await run("HeapCenterLifecycle", { jar, center: c.center, carrier });
+      const stage = (s) => life.rows.filter(r => r.stage === s);
+      const born = stage("born"), construction = stage("construction"), enrolled = stage("enrolled");
+      const released = stage("released");
+      const releasesCenter = released.filter(r => r.takesCenter);
+      const otherRemovals = released.filter(r => !r.takesCenter);
+
+      // ── 3. The verdict, each line from the rows above ──
+      const verdict = [];
+      if (life.error) {
+        verdict.push("The lifecycle could not be read: " + life.error);
+      } else {
+        if (!born.length) verdict.push("No `new " + simple(c.center) + "` in the jar: it is created elsewhere (a library, reflection, deserialization).");
+        // A center that enrolls itself while it is being constructed: one of its constructor's calls
+        // is a method that puts it into a carrier. Nothing outside it decided to keep it.
+        const enrollers = new Set(enrolled.map(r => String(r.method).replace(/\s/g, "")));
+        const selfEnroll = construction.filter(r => enrollers.has(String(r.what).replace(/\s/g, "")));
+        if (selfEnroll.length) verdict.push("A " + simple(c.center) + " enrolls itself in its carrier while it is constructed: its constructor calls " +
+          short(selfEnroll[0].what) + ", which " + enrolled.filter(r => String(r.method).replace(/\s/g, "") === String(selfEnroll[0].what).replace(/\s/g, ""))
+            .map(r => (r.what.startsWith("grows ") ? r.what.split(" (")[0] : "puts it into a collection") + " at " + at(r)).join(" and ") + ".");
+        if (!enrolled.length) verdict.push("No put or add in the jar is given a " + simple(c.center) + ": it joins its carrier through code this reads cannot see (a helper outside the jar, or a second call on one line).");
+        if (releasesCenter.length) {
+          verdict.push("Released at " + releasesCenter.map(r => short(r.method) + " (" + at(r) + ", " + r.what + ")").join("; ") +
+            ". The lifecycle has an end; the question is why it is not reached for the " + (c.instances || 0).toLocaleString() + " still in the heap.");
+        } else {
+          verdict.push("No release path found: nothing in the jar removes a " + simple(c.center) + " from a collection" +
+            (carrier ? ", clears it, or replaces " + carrier : "") + ". Its lifecycle starts and does not end." +
+            (otherRemovals.length ? " (" + otherRemovals.length + " removal(s) elsewhere in the jar are not given one.)" : " The jar has no removal call at all."));
+          verdict.push("Found by call-site argument types and the carrier field; a removal through an iterator or a helper outside the jar would not show.");
+        }
+      }
+      leaks.push({
+        center: c.center, inApp: c.inApp, instances: c.instances, retainedBytes: c.retainedBytes,
+        carriers: c.carriers, drag: c.drag,
+        lifecycle: { born, construction, enrolled, released },
+        verdict,
+      });
+    }
+
+    const out = { kind: "heap-leaks", jar, leaks, notes,
+                  sources: { views: ["HeapLeakShape", "HeapCenterLifecycle"], lifecyclesRead: leaks.length } };
+    await gateway.lens.present({ content: JSON.stringify(out) });
+    return out;

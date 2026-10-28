@@ -1,0 +1,108 @@
+# Leaks, by their shape. A leak has three parts:
+#
+#   the CARRIER  a collection - a map, list or array, often nested - that keeps gaining entries;
+#   the CENTER   what it carries: usually one of the application's domain objects;
+#   the DRAG     what the center's fields hold, kept alive only because the center is.
+#
+# The center is the finding that matters, because the question a leak asks is about its
+# lifecycle: where a center is born, how it joins the carrier, and where - if anywhere - it is
+# released. HeapLeakShape finds the shape from the heap; HeapCenterLifecycle reads one center's
+# lifecycle from the jar. The heap-leaks lens runs the second for each center the first finds.
+
+- name: HeapLeakShape
+  description: "Each leak's shape: the center (a retaining class, the application's own when a jar is given), its instances and retained bytes, the carrier that holds it - the owner, the field, and the chain of collections between them - and the drag, what the center's fields hold."
+  params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: every retained class outside the JDK is a candidate center." }
+    samples: { type: int, default: 3, description: "Instances of each center whose path to a GC root is read. A center held by two carriers shows as two rows." }
+  # The carrier is read off a center's path from its GC root, walking back from the center: every
+  # step that is a collection (java.util.*, or an array) is carrier; the first step that is not is
+  # the owner, and the owner's field holding the outermost collection is the carrier field. A path
+  # with no such owner - collections all the way to the root - has the root as owner.
+  cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
+    MATCH (h:Heap {name: 'current'})-[:RETAINS]->(c:HeapClass)
+    OPTIONAL MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: c.className})
+    WITH c, t
+    WHERE t IS NOT NULL OR ($jar = '' AND NOT (c.className STARTS WITH 'java.' OR c.className STARTS WITH 'javax.'
+          OR c.className STARTS WITH 'jdk.' OR c.className STARTS WITH 'sun.' OR c.className ENDS WITH '[]'))
+    MATCH (c)-[:HAS_INSTANCE]->(o:HeapObject)
+    WITH c, t, o ORDER BY o.oid
+    WITH c, t, collect(o)[0..$samples] AS sampled
+    UNWIND sampled AS o
+    MATCH (o)-[:PATH_TO_ROOT]->(p:HeapPathStep)
+    WITH c, t, o, p ORDER BY p.step
+    WITH c, t, o, collect(p) AS steps
+    WITH c, t, o, steps, size(steps) - 1 AS centerAt,
+         [i IN range(0, size(steps) - 2) WHERE NOT (steps[i].typeName STARTS WITH 'java.util.' OR steps[i].typeName ENDS WITH '[]')] AS owners
+    WITH c, t, o, steps, centerAt, coalesce(last(owners), 0) AS ownerAt
+    WITH c, t, o, steps[ownerAt] AS owner, steps[ownerAt + 1] AS outer,
+         [s IN steps[ownerAt + 1 .. centerAt] | s.typeName] AS carrierChain
+    OPTIONAL MATCH (x:HeapObject {oid: outer.oid})-[:HELD_BY]->(hd:HeapHolder {oid: owner.oid})
+    WITH c, t, owner.typeName AS ownerClass, hd.field AS carrierField, carrierChain, count(DISTINCT o) AS sampledHere
+    OPTIONAL MATCH (c)-[:HAS_INSTANCE]->(o2:HeapObject)-[:HAS_FIELD]->(v:HeapFieldValue)
+    WITH c, t, ownerClass, carrierField, carrierChain, sampledHere, v.fieldKey AS dragField, v.className AS dragClass, count(v) AS dragCount
+    WITH c, t, ownerClass, carrierField, carrierChain, sampledHere,
+         collect(CASE WHEN dragField IS NULL THEN null ELSE {field: dragField, holds: dragClass, inSample: dragCount} END) AS drag
+    RETURN c.className AS center, t IS NOT NULL AS inApp, c.instances AS instances, c.retainedBytes AS retainedBytes,
+           ownerClass AS carrierOwner, carrierField, carrierChain, sampledHere AS samplesInThisCarrier, drag
+    ORDER BY retainedBytes DESC, samplesInThisCarrier DESC
+
+- name: HeapCenterLifecycle
+  description: "One center's lifecycle, as the application's jar writes it, stage by stage with source: born (every `new` of it), construction (what its constructors call), enrolled (each put or add given one, and each put or add on the carrier field), released (each remove, clear or poll - takesCenter when it is given one - and each reassignment of the carrier field). An empty released stage is a lifecycle with no end."
+  params:
+    jar: { type: string, description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/." }
+    center: { type: string, description: "The center's binary class name, e.g. com.example.Order." }
+    carrier: { type: string, default: "", description: "The carrier field as Owner.field, from HeapLeakShape. Given, what grows it is enrolled and what reassigns it is released." }
+  # Enrolled-with-the-center and released are ONE branch over one AT_SITE hop, sorted into stages
+  # by the call's name. As two branches, each with its own AT_SITE, the engine fetched the sites
+  # once for both: with no removal call in the jar the second branch's empty set won, and the first
+  # came back empty too. The argument types at a site come from a call's FIRST line, so a second
+  # same-named call in a method is not seen there - which is why the carrier's own growth is a
+  # separate stage, found by the line-overlap rule. `released` empty means none was found.
+  cypher: |
+    OPTIONAL MATCH (j:Jar {path: $jar})
+    CALL {
+      WITH j
+      MATCH (j)-[:HAS_CALL]->(b:JavaMethodCall {calleeOwner: $center, calleeName: '<init>'})
+      WITH b, $jar + '!' + b.sourcePath + '#' + toString(b.firstLine) + '#' + last(split(last(split($center, '.')), '$')) AS k1
+      OPTIONAL MATCH (l1:SourceLine {key: k1})-[:SOURCE_AT]->(s1:SourceSpan)
+      RETURN 'born' AS stage, b.caller AS method, b.sourcePath AS file, b.firstLine AS line,
+             'new ' + last(split($center, '.')) AS what, null AS argumentTypes, true AS takesCenter, s1.text AS code
+      UNION
+      WITH j
+      MATCH (j)-[:HAS_METHOD]->(m:JavaMethod {owner: $center, name: '<init>'})-[:MAKES_CALL]->(k:JavaMethodCall {internal: true})
+      WHERE k.calleeOwner <> $center
+      RETURN 'construction' AS stage, m.key AS method, k.sourcePath AS file, k.firstLine AS line,
+             k.callee AS what, null AS argumentTypes, null AS takesCenter, null AS code
+      UNION
+      WITH j
+      MATCH (j)-[:HAS_CALL]->(e:JavaMethodCall)
+      WHERE e.calleeName IN ['put', 'putIfAbsent', 'computeIfAbsent', 'compute', 'merge', 'add', 'addAll', 'putAll',
+                             'offer', 'push', 'addFirst', 'addLast', 'set',
+                             'remove', 'removeIf', 'removeAll', 'retainAll', 'clear', 'poll', 'pollFirst', 'pollLast',
+                             'removeFirst', 'removeLast', 'invalidate', 'invalidateAll', 'evict']
+      OPTIONAL MATCH (e)-[:AT_SITE]->(cs:JavaCallSite)
+      WITH e, cs, $center IN coalesce(cs.argumentTypes, []) AS takes,
+           CASE WHEN e.calleeName IN ['remove', 'removeIf', 'removeAll', 'retainAll', 'clear', 'poll', 'pollFirst', 'pollLast',
+                                      'removeFirst', 'removeLast', 'invalidate', 'invalidateAll', 'evict']
+                THEN 'released' ELSE 'enrolled' END AS st
+      WHERE st = 'released' OR takes
+      RETURN st AS stage, e.caller AS method, e.sourcePath AS file, coalesce(cs.line, e.firstLine) AS line,
+             e.calleeOwner + '.' + e.calleeName AS what, cs.argumentTypes AS argumentTypes, takes AS takesCenter, cs.text AS code
+      UNION
+      WITH j
+      MATCH (j)-[:HAS_FIELD]->(gf:JavaField {key: $carrier})
+      MATCH (gf)-[:ACCESSED_BY]->(ga:JavaFieldAccess {access: 'READ'})-[:SAME_METHOD_CALL]->(gc:JavaMethodCall)
+      WHERE gc.calleeName IN ['put', 'putIfAbsent', 'computeIfAbsent', 'compute', 'merge', 'add', 'addAll', 'putAll', 'offer', 'push']
+      UNWIND [n IN gc.lines WHERE n IN ga.lines] AS gl
+      RETURN 'enrolled' AS stage, ga.method AS method, ga.sourcePath AS file, gl AS line,
+             'grows ' + gf.key + ' (' + gc.calleeOwner + '.' + gc.calleeName + ')' AS what, null AS argumentTypes, null AS takesCenter, null AS code
+      UNION
+      WITH j
+      MATCH (j)-[:HAS_FIELD]->(cf:JavaField {key: $carrier})-[:ACCESSED_BY]->(w:JavaFieldAccess {access: 'WRITE'})
+      WHERE NOT w.method CONTAINS '.<clinit>(' AND NOT w.method CONTAINS '.<init>('
+      RETURN 'released' AS stage, w.method AS method, w.sourcePath AS file, w.firstLine AS line,
+             'reassigns ' + cf.key AS what, null AS argumentTypes, true AS takesCenter, null AS code
+    }
+    RETURN stage, method, file, line, what, argumentTypes, takesCenter, code
+    ORDER BY CASE stage WHEN 'born' THEN 0 WHEN 'construction' THEN 1 WHEN 'enrolled' THEN 2 ELSE 3 END, file, line
