@@ -2,9 +2,9 @@
 # their stacks, class loaders, humongous arrays, entanglement, finalization. Each is a whole-heap
 # read from the Heap anchor (one call), except a thread's frames, batched by thread.
 #
-# Frames carry a spanKey for the hardcoded jar (jars/jheapo-0.1.0-SNAPSHOT.jar), so a stack frame reaches the exact source line
-# it was executing — through this realm's own source producers, which find the jar's -sources.jar
-# beside it.
+# No jar is named here. A frame carries its class, method, line and sourcePath; a view given the
+# application's jar reaches the line it was executing by pinning a SourceLine (types/findings.yml)
+# keyed the way realm-java-code keys a span: `<jar>!<sourcePath>#<line>#<method>`.
 
 - name: heapWasteFindings
   kind: remote
@@ -72,7 +72,6 @@
   compute:
     id: "r.holderClass + '.' + r.field + ':' + r.collectionClass + '>' + r.storedClass"
     fieldKey: "r.holderClass + '.' + r.field"
-    javaFieldId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.holderClass + '.' + r.field"
 
 - name: heapThreads
   kind: remote
@@ -98,9 +97,6 @@
     - { property: packageName, op: IN,     argPath: package,   clause: "{values}" }
   compute:
     id: "r.forKey + '#' + toString(r.frame)"
-    # Only jheapo's own frames are the jar's: a JDK frame names no jar, as a stack trace's does.
-    javaTypeId: "CASE WHEN r.className STARTS WITH 'com.kodewerk.jheapo.' THEN 'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.className END"
-    spanKey: "CASE WHEN r.className STARTS WITH 'com.kodewerk.jheapo.' AND r.line > 0 AND r.sourcePath IS NOT NULL THEN 'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.sourcePath + '#' + toString(r.line) + '#' + r.method END"
 
 - name: heapClassLoaderGroups
   kind: remote
@@ -123,7 +119,6 @@
   pushdown: []
   compute:
     id: "r.ownerClassName + ':' + r.arrayClassName"
-    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.ownerClassName"
 
 - name: heapEntanglement
   kind: remote
@@ -133,8 +128,6 @@
   echoKeyAs: heapKey
   records: "$.classes[*]"
   pushdown: []
-  compute:
-    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.name"
 
 - name: heapFinalization
   kind: remote
@@ -147,7 +140,8 @@
   project: { pending: pending, registered: registered, finalized: finalized, total: total,
              finalizersRegistered: finalizersRegistered, cleanupActions: cleanupActions }
 
-# ── The source of a stack frame, read from the jar's -sources.jar beside it ────────────────────
+# ── The source of a stack frame: the jar's -sources.jar beside it, else the roots ──────────────
+# The same roots realm-java-source-code reads, under the world's data/ tree.
 
-- { name: heapSourceSpan,     kind: source, emit: spans,        roots: [src], context: 4 }
-- { name: heapDeclarationAt,  kind: source, emit: declarations, roots: [src] }
+- { name: heapSourceSpan,     kind: source, emit: spans,        roots: [data/sources, src], context: 4 }
+- { name: heapDeclarationAt,  kind: source, emit: declarations, roots: [data/sources, src] }

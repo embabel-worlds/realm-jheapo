@@ -6,11 +6,17 @@
     The classes retaining the most of the current heap, every method in the jar that writes their
     fields, and whether that method appears in a failure the logs recorded - is the code growing
     the heap the code that is failing?
+  params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (me:AssistantUser)-[:HAS_LOG_EVENT]->(e:LogEvent {hasTrace: true})-[:HAS_FRAME]->(f:JavaStackFrame {inJar: true})
-    WITH collect(DISTINCT f.className + '.' + f.method) AS failing
-    MATCH (h:Heap {name: 'current'})-[:RETAINS]->(c:HeapClass)-[:COMPILED_AS]->(t:JavaType)-[:DECLARES_FIELD]->(fld:JavaField)-[:ACCESSED_BY]->(a:JavaFieldAccess {access: 'WRITE'})
-    WITH c, fld, a, failing, split(a.method, '(')[0] AS writer
+    WITH j, collect(DISTINCT f.className + '.' + f.method) AS failing
+    MATCH (h:Heap {name: 'current'})-[:RETAINS]->(c:HeapClass)
+    OPTIONAL MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: c.className})
+    WITH j, c, t, failing WHERE t IS NOT NULL
+    MATCH (t)-[:DECLARES_FIELD]->(fld:JavaField)-[:ACCESSED_BY]->(a:JavaFieldAccess {access: 'WRITE'})
+    WITH j, c, fld, a, failing, split(a.method, '(')[0] AS writer
     RETURN c.className AS retainer, c.instances AS instances, c.retainedBytes AS retained, fld.name AS field, fld.type AS type,
            writer, a.lines AS lines, writer IN failing AS inLoggedFailure
     ORDER BY retained DESC, field, writer

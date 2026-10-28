@@ -15,9 +15,9 @@
   "name": "heap-lens",
   "title": "Heap Lens",
   "requires": {
-    "lenses": ["heap-takeaways"],
+    "lenses": ["heap-takeaways", "heap-leaks"],
     "views": [
-      "HeapOverviewTotals", "HeapAppRetainers", "HeapAppHistogram", "HeapAppLeakSuspects",
+      "HeapOverviewTotals", "HeapConcerns", "HeapAppRetainers", "HeapAppHistogram", "HeapAppLeakSuspects",
       "HeapAppInstances", "HeapAppClassHolders", "HeapAppHolders", "HeapAppFields", "HeapAppPath",
       "HeapAppFieldCode", "HeapAppFieldGrowth", "HeapAppClassSource",
       "HeapFindingsWaste", "HeapFindingsDuplicateStrings", "HeapFindingsStringHolders", "HeapFindingsIdleCollections",
@@ -42,6 +42,9 @@
   .top { display: flex; align-items: center; gap: 18px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, #121722, var(--bg)); }
   .brand { font-weight: 700; letter-spacing: .2px; font-size: 15px; white-space: nowrap; }
   .brand span { color: var(--accent); }
+  .jar { display: flex; align-items: center; gap: 6px; color: var(--dim); white-space: nowrap; }
+  .jar input { width: 230px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; color: var(--text); font: 12px var(--mono); }
+  .jar input:focus { outline: none; border-color: var(--accent); }
   .tiles { display: flex; gap: 10px; flex-wrap: wrap; }
   .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; min-width: 96px; }
   .tile b { display: block; font-size: 15px; }
@@ -69,6 +72,13 @@
   .badge.app { color: var(--app); border-color: rgba(245,176,65,.5); }
   .badge.id { color: var(--bad); border-color: rgba(255,107,107,.5); }
   .badge.jdk { color: var(--faint); border-color: var(--line); }
+  .badge.bad { color: var(--bad); border-color: rgba(255,107,107,.5); }
+  .stage { padding: 8px 12px 2px; border-top: 1px solid var(--line); }
+  .stage h4 { margin: 0 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); }
+  .stage.none h4 { color: var(--bad); }
+  .stage .at { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; margin: 6px 0 2px; }
+  .chain { font-family: var(--mono); font-size: 11.5px; color: var(--dim); }
+  .card .pad .why { padding: 4px 0 0; color: var(--faint); font-size: 11.5px; }
   .pad { padding: 12px; }
   .muted { color: var(--dim); }
   .empty { color: var(--dim); padding: 18px 12px; }
@@ -133,6 +143,7 @@
 <div class="top">
   <div class="brand">Heap <span>Lens</span></div>
   <button class="btn" id="takeBtn" title="What matters, and what to change">Takeaways</button>
+  <label class="jar" title="The application's jar under the world's data/, as realm-java-code reads it. Empty: the heap alone.">Jar <input id="jar" placeholder="jars/app.jar" spellcheck="false" autocomplete="off"></label>
   <div class="tiles" id="tiles"><div class="muted"><span class="spin"></span>Reading the heap…</div></div>
 </div>
 <div class="grid">
@@ -140,6 +151,8 @@
     <div class="head">
       <h2>Where the memory is</h2>
       <div class="tabs" id="tabs">
+        <button data-t="leaks">Leaks</button>
+        <button data-t="concerns">Concerns</button>
         <button data-t="retainers" class="on">Retainers</button>
         <button data-t="histogram">Histogram</button>
         <button data-t="suspects">Leak suspects</button>
@@ -163,14 +176,25 @@
 (function () {
   'use strict';
   var $ = function (id) { return document.getElementById(id); };
-  var state = { tab: 'retainers', mine: false, classId: null, className: null, oid: null };
+  var state = { tab: 'retainers', mine: false, jar: '', classId: null, className: null, oid: null };
+  /* The views that reach the application's code take `jar`; a view refuses a param it does not declare. */
+  var JAR_VIEWS = {};
+  ['HeapConcerns', 'HeapAppRetainers', 'HeapAppHistogram', 'HeapAppLeakSuspects', 'HeapAppHolders', 'HeapAppFields', 'HeapAppPath',
+   'HeapAppFieldCode', 'HeapAppFieldGrowth', 'HeapAppClassSource', 'HeapAppClassHolders',
+   'HeapFindingsNestedCollections', 'HeapFindingsBlockedThreads', 'HeapFindingsStacksInYourCode', 'HeapFindingsStaticPins',
+   'HeapFindingsIdentityKeys', 'HeapFindingsHumongous', 'HeapFindingsEntanglement', 'HeapFindingsYourDominators'
+  ].forEach(function (n) { JAR_VIEWS[n] = true; });
   var lists = {};
 
   /* ── plumbing ──────────────────────────────────────────────────────────────────────────── */
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>'"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]; }); }
   function rowsOf(r) { if (!r) return []; if (Array.isArray(r)) return r; if (Array.isArray(r.rows)) return r.rows; if (r.data && Array.isArray(r.data.rows)) return r.data.rows; if (Array.isArray(r.data)) return r.data; return []; }
   function warningsOf(r) { if (!r) return []; if (Array.isArray(r.warnings)) return r.warnings; if (r.data && Array.isArray(r.data.warnings)) return r.data.warnings; return []; }
-  function view(name, args) { return embabel.views.invoke(name, args || {}).then(function (r) { return { rows: rowsOf(r), warnings: warningsOf(r) }; }); }
+  function view(name, args) {
+    var a = {}; Object.keys(args || {}).forEach(function (k) { a[k] = args[k]; });
+    if (JAR_VIEWS[name]) a.jar = state.jar;
+    return embabel.views.invoke(name, a).then(function (r) { return { rows: rowsOf(r), warnings: warningsOf(r) }; });
+  }
   function bytes(n) { if (n == null || n < 0) return '—'; var u = ['B', 'KB', 'MB', 'GB']; var i = 0; n = Number(n); while (n >= 1024 && i < 3) { n /= 1024; i++; } return (i ? n.toFixed(1) : n) + ' ' + u[i]; }
   function num(n) { return n == null ? '—' : Number(n).toLocaleString(); }
   function shortName(cn) { if (!cn) return ''; var s = String(cn).split(' ')[0]; var i = s.lastIndexOf('.'); return i < 0 ? s : s.slice(i + 1); }
@@ -224,6 +248,8 @@
   function list() {
     var el = $('list'); var t = state.tab;
     if (t === 'findings') return findingsList(el);
+    if (t === 'concerns') return concernsList(el);
+    if (t === 'leaks') return leaksList(el);
     var go = lists[t] ? Promise.resolve(lists[t]) : view(TABS[t]).then(function (r) { lists[t] = r; return r; });
     if (!lists[t]) loading(el, 'Reading ' + t + '…');
     go.then(function (r) {
@@ -250,6 +276,7 @@
   function route() {
     if (location.hash === '#/takeaways') return takeaways();
     var fm = location.hash.match(/^#\/finding\/(HeapFindings[A-Za-z]+)$/); if (fm) return showFinding(fm[1]);
+    var lm = location.hash.match(/^#\/leak\/(\d{1,3})$/); if (lm) return showLeak(Number(lm[1]));
     var m = location.hash.match(/^#\/(class|object|field|source)\/([^/]+)(?:\/([^/]+))?$/); if (!m) return;
     var id = decodeURIComponent(m[2]), name = m[3] ? decodeURIComponent(m[3]) : null;
     if (name && !NAME.test(name)) name = null;
@@ -445,6 +472,113 @@
     ['HeapFindingsThreads', 'All threads'], ['HeapFindingsClassLoaders', 'Class loaders'], ['HeapFindingsFinalization', 'Finalization']
   ];
   var findingRows = {};
+  /* ── concerns: what is worrying, ranked, each tied to the class or field that causes it ──────
+     A row opens its subject's code in the Code panel: a field its declaration, writes and growth,
+     a class its source. Without a jar the subject's kind is not known; a last segment in lower
+     case reads as a field (`Owner.field`), the Java naming convention. */
+  function concernsList(el) {
+    var go = lists.concerns ? Promise.resolve(lists.concerns) : view('HeapConcerns').then(function (r) { lists.concerns = r; return r; });
+    if (!lists.concerns) loading(el, 'Ranking what is worrying…');
+    go.then(function (r) {
+      var rows = r.rows.filter(function (x) { return !state.mine || x.inApp; });
+      var max = Math.max.apply(null, rows.map(function (x) { return x.bytes || 0; }).concat([1]));
+      el.innerHTML = warn(r.warnings) + (rows.length ? rows.map(function (x, i) {
+        var field = isField(x);
+        return '<div class="row' + (x.inApp ? ' app' : '') + '" data-i="' + i + '"><div>' + esc(x.concern) + '</div>' +
+          '<div class="meta"><span class="mono">' + (field ? esc(fieldShort(x.subject)) : cls(x.subject)) + '</span>' +
+          (x.inApp ? '<span class="badge app">your code</span>' : '') + '<span>' + bytes(x.bytes) + '</span></div>' +
+          '<div class="bar"><i style="width:' + Math.max(2, 100 * (x.bytes || 0) / max).toFixed(1) + '%"></i></div>' +
+          '<div class="muted" style="font-size:11.5px;margin-top:3px">' + esc(x.remedy) + '</div></div>';
+      }).join('') : '<div class="empty">Nothing worrying' + (state.mine ? ' in your code' : '') + ' above 1 MB.</div>') +
+        (state.jar ? '' : '<div class="pad muted" style="font-size:11.5px">Give the application\'s jar above to mark what your code can fix and read its source.</div>');
+      Array.prototype.forEach.call(el.querySelectorAll('.row'), function (div) {
+        div.onclick = function () {
+          var x = rows[Number(div.dataset.i)];
+          if (!NAME.test(x.subject)) return;
+          location.hash = '#/' + (isField(x) ? 'field' : 'source') + '/' + encodeURIComponent(x.subject);
+        };
+      });
+    }).catch(function (e) { failed(el, e); });
+  }
+  /* ── leaks: each as carrier, center and drag, with the center's lifecycle (the heap-leaks lens) ──
+     The lens runs HeapLeakShape, then HeapCenterLifecycle for each center, and writes the verdict
+     from their rows; nothing here judges. One run serves the list and every drill-down, and a new
+     jar clears it with the other lists. */
+  var leaksRun = null;
+  function leaks() {
+    if (!state.jar) return Promise.reject(new Error('Give the application\'s jar above: a leak\'s lifecycle is read from its code.'));
+    if (!leaksRun) leaksRun = embabel.lenses.invoke('heap-leaks', { jar: state.jar, centers: 3 }, { state: $('lprogress') })
+      .then(function (r) { var out = lensData(r) || {}; if (out.error) throw new Error(out.error); return out; })
+      .catch(function (e) { leaksRun = null; throw e; });
+    return leaksRun;
+  }
+  function noRelease(l) { return !(l.lifecycle.released || []).some(function (r) { return r.takesCenter; }); }
+  function selfEnrolls(l) { return (l.verdict || []).some(function (v) { return /enrolls itself/.test(v); }); }
+  function leaksList(el) {
+    /* No jar yet: ask for it here, where the need is, rather than pointing at the box above. */
+    if (!state.jar) {
+      el.innerHTML = '<div class="pad"><div style="margin-bottom:8px">A leak\'s lifecycle is read from the application\'s code. Which jar?</div>' +
+        '<div class="jar" style="gap:8px"><input id="ljar" placeholder="jars/app.jar" spellcheck="false" autocomplete="off" style="flex:1">' +
+        '<button class="btn" id="lgo">Read leaks</button></div>' +
+        '<div class="muted" style="font-size:11.5px;margin-top:8px">The path under the world\'s <code>data/</code>, as <code>bin/stage-app</code> printed it. It is remembered, and the box at the top shows it.</div></div>';
+      var go = function () { var v = $('ljar').value.trim(); if (!v) return; $('jar').value = v; $('jar').onchange(); };
+      $('lgo').onclick = go;
+      $('ljar').onkeydown = function (e) { if (e.key === 'Enter') go(); };
+      $('ljar').focus();
+      return;
+    }
+    if (!leaksRun) el.innerHTML = '<div class="empty"><span class="spin"></span>Finding each leak\'s carrier, center and drag, then reading every center\'s lifecycle from the jar…<div id="lprogress"></div></div>';
+    leaks().then(function (out) {
+      if (state.tab !== 'leaks') return;
+      var ls = out.leaks || [];
+      el.innerHTML = (ls.length ? ls.map(function (l, i) {
+        var c = l.carriers[0] || {};
+        return '<div class="row' + (l.inApp ? ' app' : '') + '" data-i="' + i + '">' + cls(l.center) +
+          (l.inApp ? '<span class="badge app">your code</span>' : '') +
+          (noRelease(l) ? '<span class="badge bad">no release path</span>' : '') + (selfEnrolls(l) ? '<span class="badge bad">self-enrolls</span>' : '') +
+          '<div class="meta"><span>' + num(l.instances) + ' objects</span><span>' + bytes(l.retainedBytes) + ' retained</span></div>' +
+          '<div class="muted" style="font-size:11.5px;margin-top:3px">carried by <span class="mono">' + esc(c.field ? fieldShort(c.field) : shortName(c.owner)) + '</span></div></div>';
+      }).join('') : '<div class="empty">No center found: no class of the application\'s jar retains memory above jheapo\'s threshold.</div>') +
+        ((out.notes || []).length ? '<div class="pad muted" style="font-size:11.5px">' + out.notes.map(esc).join('<br>') + '</div>' : '');
+      Array.prototype.forEach.call(el.querySelectorAll('.row'), function (div) { div.onclick = function () { location.hash = '#/leak/' + div.dataset.i; }; });
+      if (!/^#\/leak\//.test(location.hash) && ls.length) location.hash = '#/leak/0';
+    }).catch(function (e) { if (state.tab === 'leaks') failed(el, e); });
+  }
+  function ownerOf(method) { var m = String(method || '').split('(')[0]; return m.slice(0, m.lastIndexOf('.')); }
+  function showLeak(i) {
+    var w = $('work'); loading(w, 'Reading the leak…');
+    leaks().then(function (out) {
+      var l = (out.leaks || [])[i]; if (!l) { w.innerHTML = '<div class="empty">No such leak.</div>'; return; }
+      crumbs([{ text: 'Leaks', href: '#' }, { text: shortName(l.center) }]);
+      var anatomy = '<div class="card"><h3>' + esc(shortName(l.center)) + ' <span class="act muted">' + num(l.instances) + ' objects · ' + bytes(l.retainedBytes) + ' retained</span></h3><div class="kv">' +
+        l.carriers.map(function (c, n) {
+          return '<div>' + (n ? '' : 'Carrier') + '</div><div>' + (c.field ? '<span class="field" data-f="' + esc(c.field) + '">' + esc(fieldShort(c.field)) + '</span>' : '<span class="link" data-src="' + esc(c.owner) + '">' + esc(shortName(c.owner)) + '</span>') +
+            ' <span class="muted">' + esc(c.samples) + ' of the sampled paths</span><div class="chain">' + esc(shortName(c.owner)) + ' → ' + (c.chain || []).map(shortName).map(esc).join(' → ') + ' → ' + esc(shortName(l.center)) + '</div></div>';
+        }).join('') +
+        '<div>Center</div><div><span class="link" data-src="' + esc(l.center) + '">' + esc(l.center) + '</span>' + (l.inApp ? '<span class="badge app">your code</span>' : '') + '</div>' +
+        '<div>Drag</div><div>' + ((l.drag || []).length ? l.drag.map(function (d) { return '<span class="field" data-f="' + esc(d.field) + '">' + esc(fieldShort(d.field)) + '</span> <span class="muted">→ ' + esc(shortName(d.holds)) + '</span>'; }).join('<br>') : '<span class="muted">its fields hold nothing else</span>') + '</div>' +
+        '</div></div>';
+      var STAGES = [['born', 'Born', 'Nothing in the jar creates one.'], ['construction', 'While it is constructed', 'Its constructors call nothing else in the jar.'],
+                    ['enrolled', 'Joins the carrier', 'No put or add in the jar is given one.'], ['released', 'Released', 'Nothing in the jar releases one: this lifecycle has no end.']];
+      var life = '<div class="card"><h3>Lifecycle</h3>' + STAGES.map(function (st) {
+        var rows = (l.lifecycle[st[0]] || []).filter(function (r) { return st[0] !== 'released' || r.takesCenter; });
+        return '<div class="stage' + (rows.length ? '' : ' none') + '"><h4>' + esc(st[1]) + '</h4>' + (rows.length ? rows.map(function (r) {
+          var code = r.code ? (/^\d+: /.test(r.code) ? r.code : r.line + ': ' + r.code) : '';
+          return '<div class="at"><span class="link mono" data-src="' + esc(ownerOf(r.method)) + '">' + esc(shortName(ownerOf(r.method)) + '.' + String(r.method).split('(')[0].split('.').pop()) + '</span>' +
+            '<span class="muted">' + esc((r.file || '').split('/').pop() + ':' + r.line) + ' · ' + esc(String(r.what).replace(/com\.[\w.]+\.(\w+)/g, '$1')) + '</span></div>' + (code ? codeBlock(code, [r.line]) : '');
+        }).join('') : '<div class="muted" style="font-size:12px;padding-bottom:6px">' + esc(st[2]) + '</div>') + '</div>';
+      }).join('') + '</div>';
+      var verdict = '<div class="card"><h3>Verdict</h3><div class="pad">' + (l.verdict || []).map(function (v, n) {
+        return '<div style="margin-bottom:6px' + (/^Found by/.test(v) ? ';color:var(--dim);font-size:11.5px' : '') + '">' + prose(v) + '</div>';
+      }).join('') + '<div class="why">Written by the heap-leaks lens from HeapLeakShape and HeapCenterLifecycle rows, which run in the Query Studio. No model wrote this.</div></div></div>';
+      w.innerHTML = anatomy + life + verdict; wire(w); w.scrollTop = 0;
+      var cf = (l.carriers.filter(function (c) { return c.field; })[0] || {}).field; if (cf) showField(cf, true);
+    }).catch(function (e) { failed(w, e); });
+  }
+  function isField(x) {
+    if (x.kind) return x.kind === 'field';
+    var last = String(x.subject || '').split('.').pop(); return /^[a-z_]/.test(last);
+  }
   function findingsList(el) {
     el.innerHTML = FINDINGS.map(function (f, i) {
       var r = findingRows[f[0]];
@@ -496,7 +630,7 @@
       '<div class="pad" id="tprogress"></div></div></div>';
     var t0 = Date.now();
     var clock = setInterval(function () { var el = $('tstate'); if (!el) return clearInterval(clock); el.textContent = Math.round((Date.now() - t0) / 1000) + ' s'; }, 1000);
-    embabel.lenses.invoke('heap-takeaways', {}, { state: $('tprogress') }).then(function (r) {
+    embabel.lenses.invoke('heap-takeaways', { jar: state.jar }, { state: $('tprogress') }).then(function (r) {
       clearInterval(clock);
       var out = lensData(r) || {};
       if (out.error || !out.text) {
@@ -524,6 +658,13 @@
   addEventListener('keydown', function (e) { if (e.key === 'm' && !/input|textarea/i.test(e.target.tagName)) { $('mine').click(); } });
   addEventListener('hashchange', route);
   try { if (localStorage.getItem('heap-lens.mine')) { $('mine').checked = true; state.mine = true; } } catch (e) {}
+  try { state.jar = localStorage.getItem('heap-lens.jar') || ''; } catch (e) {}
+  $('jar').value = state.jar;
+  $('jar').onchange = function () {
+    state.jar = $('jar').value.trim();
+    try { localStorage.setItem('heap-lens.jar', state.jar); } catch (e) {}
+    lists = {}; findingRows = {}; leaksRun = null; list(); route();
+  };
   $('takeBtn').onclick = function () { location.hash = '#/takeaways'; };
   header(); list();
   if (location.hash) route();

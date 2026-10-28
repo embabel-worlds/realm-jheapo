@@ -16,11 +16,12 @@
     The classes of one package retaining the most heap, each with its compiled type in the jar and
     its source file: where the memory is, and the code that declares it.
   params:
-    jar: { type: string, description: "The application's jar, e.g. jars/app.jar under the world's data/." }
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
     package: { type: string, description: "Dotted package, e.g. com.example.cache: filtered by jheapo." }
   cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (h:Heap {name: 'current'})-[:RETAINS]->(c:HeapClass {packageName: $package})
-    OPTIONAL MATCH (j:Jar {path: $jar})-[:HAS_TYPE]->(t:JavaType {name: c.className})
+    OPTIONAL MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: c.className})
     OPTIONAL MATCH (t)-[:DEFINED_IN]->(s:JavaSource)
     RETURN c.className AS class, c.instances AS instances, c.retainedBytes AS retainedBytes,
            t.kind AS kind, t.hashCodeFrom AS hashCodeFrom, s.path AS source, s.lines AS lines
@@ -32,13 +33,14 @@
     vector from an object in the heap to the code that put it there. Arrays and JDK holders are
     shown with no field; follow them up with HELD_BY.
   params:
-    jar: { type: string, description: "The application's jar." }
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
     class: { type: string, description: "Binary class name of the objects held." }
   cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (h:Heap {name: 'current'})-[:RETAINS]->(c:HeapClass {className: $class})-[:HAS_INSTANCE]->(o:HeapObject)
           -[:HELD_BY]->(hd:HeapHolder)
-    WITH hd.className AS holder, hd.field AS field, count(DISTINCT o) AS objects
-    OPTIONAL MATCH (j:Jar {path: $jar})-[:HAS_FIELD]->(f:JavaField {key: field})
+    WITH j, hd.className AS holder, hd.field AS field, count(DISTINCT o) AS objects
+    OPTIONAL MATCH (j)-[:HAS_FIELD]->(f:JavaField {key: field})
     OPTIONAL MATCH (f)-[:ACCESSED_BY]->(a:JavaFieldAccess {access: 'WRITE'})-[:SOURCE_AT]->(s:SourceSpan)
     RETURN holder, field, objects, f.genericType AS declaredAs, f.isStatic AS isStatic,
            a.method AS writtenBy, s.fromLine AS line, s.text AS code
@@ -46,19 +48,26 @@
 
 - name: HeapFieldGrowthCode
   description: >-
-    For the fields holding a class's instances: each method that touches the field and adds to a
-    container in the same method, with the call as source writes it - where the holder grows.
+    For the fields holding a class's instances: each put or add made on a line that reads the
+    field, with that line as source writes it - where the holder grows.
   params:
-    jar: { type: string, description: "The application's jar." }
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
     class: { type: string, description: "Binary class name of the objects held." }
+  # Same rule as HeapAppFieldGrowth: a put/add on a line that also reads the field.
   cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (h:Heap {name: 'current'})-[:RETAINS]->(c:HeapClass {className: $class})-[:HAS_INSTANCE]->(o:HeapObject)
           -[:HELD_BY]->(hd:HeapHolder)
-    WITH DISTINCT hd.field AS field
-    MATCH (j:Jar {path: $jar})-[:HAS_FIELD]->(f:JavaField {key: field})
-    MATCH (f)-[:ACCESSED_BY]->(a:JavaFieldAccess)-[:SAME_METHOD_CALL]->(call:JavaMethodCall)-[:AT_SITE]->(cs:JavaCallSite)
-    WHERE call.calleeName IN ['put', 'putIfAbsent', 'computeIfAbsent', 'merge', 'add', 'addAll', 'offer', 'push']
-    RETURN field, a.method AS method, cs.line AS line, cs.text AS code, cs.argumentTypes AS argumentTypes
+    WITH DISTINCT j, hd.field AS field
+    MATCH (j)-[:HAS_FIELD]->(f:JavaField {key: field})
+    MATCH (f)-[:ACCESSED_BY]->(a:JavaFieldAccess {access: 'READ'})-[:SAME_METHOD_CALL]->(call:JavaMethodCall)
+    WHERE call.calleeName IN ['put', 'putIfAbsent', 'computeIfAbsent', 'compute', 'merge', 'add', 'addAll', 'putAll', 'offer', 'push']
+    UNWIND [l IN call.lines WHERE l IN a.lines] AS line
+    WITH field, a, call, line, $jar + '!' + a.sourcePath + '#' + toString(line) + '#' + call.calleeName AS lineKey
+    OPTIONAL MATCH (sl:SourceLine {key: lineKey})-[:SOURCE_AT]->(s:SourceSpan)
+    WITH field, a, call, line, head([x IN split(s.text, '\n') WHERE x STARTS WITH toString(line) + ':']) AS at
+    RETURN DISTINCT field, a.method AS method, line, call.calleeOwner + '.' + call.calleeName AS grows,
+           CASE WHEN at IS NULL THEN null ELSE trim(substring(at, size(toString(line)) + 1)) END AS code
     ORDER BY field, line
 
 - name: HeapLeakPathInCode
@@ -66,11 +75,12 @@
     The top leak suspect's path from its GC root, step by step, each step's class with its source
     file when the jar compiled it - where a chain leaves library code for the application's.
   params:
-    jar: { type: string, description: "The application's jar." }
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (h:Heap {name: 'current'})-[:LEAK_SUSPECT]->(o:HeapObject)-[:PATH_TO_ROOT]->(p:HeapPathStep)
-    WITH o, p ORDER BY o.retainedSize DESC, p.step
-    OPTIONAL MATCH (j:Jar {path: $jar})-[:HAS_TYPE]->(t:JavaType {name: p.className})
+    WITH j, o, p ORDER BY o.retainedSize DESC, p.step
+    OPTIONAL MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: p.typeName})
     OPTIONAL MATCH (t)-[:DEFINED_IN]->(s:JavaSource)
     RETURN o.className AS suspect, o.retainedSize AS retainedSize, p.step AS step, p.className AS class,
            t IS NOT NULL AS inJar, s.path AS source
