@@ -1,7 +1,8 @@
 # Findings: one view per classic Java memory or concurrency problem. Each is written to say something
 # on ANY heap — an empty answer is itself the finding ("no thread is blocked", "nothing is pinned by
 # a static") — and each carries what it finds into the application's jar and source where that is
-# where the answer lives. The jar is the one the producers name (hardcoded for now).
+# where the answer lives. The application's jar is the view's `jar` param; given `jar: null` a
+# finding answers from the heap alone, and nothing is marked as the application's.
 
 - name: HeapFindingsWaste
   description: "Every kind of waste jheapo measured, largest first: what it is, the bytes, how sure, the class it points at, whether that is the application's own code, and the remedy."
@@ -42,9 +43,12 @@
 
 - name: HeapFindingsNestedCollections
   description: "Collections of collections and the fields that hold them, statically held first, with how the application declares the field and the code that assigns it - the shape of most unbounded caches."
+  params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (h:Heap {name: 'current'})-[:NESTED_COLLECTION]->(n:HeapNestedCollection)
-    OPTIONAL MATCH (n)-[:HELD_IN]->(f:JavaField)
+    OPTIONAL MATCH (j)-[:HAS_FIELD]->(f:JavaField {key: n.fieldKey})
     RETURN n.fieldKey AS field, n.inStatic AS static, n.collectionClass AS outer, n.storedClass AS inner,
            n.references AS innerCollections, f.genericType AS declaredAs, f IS NOT NULL AS yourCode
     ORDER BY static DESC, yourCode DESC, innerCollections DESC
@@ -58,19 +62,28 @@
 
 - name: HeapFindingsBlockedThreads
   description: "Threads BLOCKED on a monitor or WAITING, each with the frame it is stuck in and that line of source when the application's jar compiled it. Empty is good news."
+  params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (h:Heap {name: 'current'})-[:HAS_THREAD]->(t:HeapThread)
     WHERE t.state IN ['BLOCKED', 'WAITING']
     MATCH (t)-[:HAS_FRAME]->(f:HeapStackFrame {frame: 0})
-    OPTIONAL MATCH (f)-[:SOURCE_AT]->(s:SourceSpan)
+    WITH j, t, f, CASE WHEN $jar <> '' AND f.line > 0 AND f.sourcePath IS NOT NULL THEN $jar + '!' + f.sourcePath + '#' + toString(f.line) + '#' + CASE f.method WHEN '<init>' THEN last(split(last(split(f.className, '.')), '$')) ELSE f.method END END AS lineKey
+    OPTIONAL MATCH (l:SourceLine {key: lineKey})-[:SOURCE_AT]->(s:SourceSpan)
     RETURN t.state AS state, t.name AS thread, f.label AS stuckIn, s.text AS code
     ORDER BY state, thread
 
 - name: HeapFindingsStacksInYourCode
   description: "Where each thread was in the application's own code: every frame of a class the application's jar compiled, with the line it was executing in context. A stack trace you can read as source."
+  params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
-    MATCH (h:Heap {name: 'current'})-[:HAS_THREAD]->(t:HeapThread)-[:HAS_FRAME]->(f:HeapStackFrame)-[:COMPILED_AS]->(c:JavaType)
-    OPTIONAL MATCH (f)-[:SOURCE_AT]->(s:SourceSpan)
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
+    MATCH (h:Heap {name: 'current'})-[:HAS_THREAD]->(t:HeapThread)-[:HAS_FRAME]->(f:HeapStackFrame)
+    MATCH (j)-[:HAS_TYPE]->(c:JavaType {name: f.className})
+    WITH j, t, f, CASE WHEN $jar <> '' AND f.line > 0 AND f.sourcePath IS NOT NULL THEN $jar + '!' + f.sourcePath + '#' + toString(f.line) + '#' + CASE f.method WHEN '<init>' THEN last(split(last(split(f.className, '.')), '$')) ELSE f.method END END AS lineKey
+    OPTIONAL MATCH (l:SourceLine {key: lineKey})-[:SOURCE_AT]->(s:SourceSpan)
     RETURN t.name AS thread, t.state AS state, f.frame AS frame, f.className + '.' + f.method AS method, f.line AS line,
            s.matches AS sourceMatches, s.text AS code
     ORDER BY thread, frame
@@ -85,8 +98,12 @@
 
 - name: HeapFindingsStaticPins
   description: "Large retainers held directly by a static field: memory that lives as long as its class loader. Shows the field, how it is declared, and whether the application owns it."
+  params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
-    MATCH (h:Heap {name: 'current'})-[:DOMINATES]->(o:HeapObject)-[:HELD_BY]->(hd:HeapHolder)-[:HELD_IN]->(f:JavaField {isStatic: true})
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
+    MATCH (h:Heap {name: 'current'})-[:DOMINATES]->(o:HeapObject)-[:HELD_BY]->(hd:HeapHolder)
+    MATCH (j)-[:HAS_FIELD]->(f:JavaField {key: hd.field, isStatic: true})
     RETURN o.className AS retainer, o.retainedSize AS retainedBytes, f.key AS staticField, f.genericType AS declaredAs, f.isFinal AS final
     ORDER BY retainedBytes DESC
 
@@ -100,8 +117,12 @@
 
 - name: HeapFindingsIdentityKeys
   description: "Objects of the application's classes used as hash-map keys while their class never overrides hashCode: equal-looking keys are different entries, and a key not kept can never be found again."
+  params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
-    MATCH (h:Heap {name: 'current'})-[:HAS_CLASS]->(c:HeapClass)-[:COMPILED_AS]->(t:JavaType {hashCodeFrom: 'java.lang.Object', kind: 'class'})
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
+    MATCH (h:Heap {name: 'current'})-[:HAS_CLASS]->(c:HeapClass)
+    MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: c.className, hashCodeFrom: 'java.lang.Object', kind: 'class'})
     MATCH (c)-[:HAS_INSTANCE]->(o:HeapObject)-[:HELD_BY]->(hd:HeapHolder)
     WHERE any(x IN hd.through WHERE x ENDS WITH '$Node.key' OR x ENDS WITH '$Entry.key')
     RETURN c.className AS keyClass, count(DISTINCT o) AS keysInSample, collect(DISTINCT hd.className) AS heldAsKeyOf, t.equalsFrom AS equalsFrom
@@ -117,18 +138,24 @@
 
 - name: HeapFindingsHumongous
   description: "Arrays big enough to be G1 humongous objects, by the class holding them: the bytes they need against the region footprint they take, and whether the application's code holds them."
+  params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (h:Heap {name: 'current'})-[:HUMONGOUS]->(a:HeapHumongousArray)
-    OPTIONAL MATCH (a)-[:COMPILED_AS]->(t:JavaType)
+    OPTIONAL MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: CASE WHEN a.ownerClassName STARTS WITH 'static ' THEN substring(a.ownerClassName, 7) ELSE a.ownerClassName END})
     RETURN a.ownerClassName AS heldBy, a.arrayClassName AS array, a.instances AS arrays, a.totalTrueBytes AS needed,
            a.totalFootprintBytes AS footprint, a.totalWastedBytes AS wasted, t IS NOT NULL AS yourCode
     ORDER BY wasted DESC
 
 - name: HeapFindingsEntanglement
   description: "Classes whose instances keep each other alive - reachable only through one another - and the bytes held that way: what one change would release together."
+  params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (h:Heap {name: 'current'})-[:ENTANGLED]->(e:HeapEntanglement)
-    OPTIONAL MATCH (e)-[:COMPILED_AS]->(t:JavaType)
+    OPTIONAL MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: e.name})
     RETURN e.name AS class, e.instances AS instances, e.entPct AS entangledPct, e.entangledBytes AS bytes, t IS NOT NULL AS yourCode
     ORDER BY bytes DESC
 
@@ -141,9 +168,13 @@
 
 - name: HeapFindingsYourDominators
   description: "The largest retainers whose path from a GC root passes through the application's own code: what your code is responsible for keeping alive, and the first of its classes on the way."
+  params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
-    MATCH (h:Heap {name: 'current'})-[:DOMINATES]->(o:HeapObject)-[:PATH_TO_ROOT]->(p:HeapPathStep)-[:COMPILED_AS]->(t:JavaType)
-    WITH o, min(p.step) AS firstStep
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
+    MATCH (h:Heap {name: 'current'})-[:DOMINATES]->(o:HeapObject)-[:PATH_TO_ROOT]->(p:HeapPathStep)
+    MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: p.typeName})
+    WITH j, o, min(p.step) AS firstStep
     MATCH (o)-[:PATH_TO_ROOT]->(p:HeapPathStep {step: firstStep})
     RETURN o.className AS retainer, o.retainedSize AS retainedBytes, p.className AS throughYourClass, firstStep AS atStep
     ORDER BY retainedBytes DESC

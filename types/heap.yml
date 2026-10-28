@@ -11,13 +11,14 @@
 #
 # Cross-referenced with realm-java-code and realm-java-source-code by name, with no translation:
 #   HeapClass.className  = JavaType.name      (binary names, `pkg.Outer$Inner`, arrays `T[]`)
+#   …typeName            = JavaType.name      (an object's class; for a Class object, the class itself)
 #   HeapHolder.field     = JavaField.key      (`Owner.field`: the field holding the object)
-#   HeapFieldValue.heldBy = JavaField.key
+#   HeapFieldValue.fieldKey = JavaField.key
 #   …packageName          = JavaPackage.name
-# and, for the one jar the producers name (hardcoded for now: jheapo's own), by keyed joins that fetch
-# exactly the type or field asked for:
-#   HeapClass / HeapObject / HeapHolder / HeapFieldValue / HeapPathStep ─COMPILED_AS▶ JavaType
-#   HeapHolder / HeapFieldValue ─HELD_IN▶ JavaField   (the field holding it; then ACCESSED_BY, SOURCE_AT, …)
+# The jar is the caller's: a view takes it as `jar` and pins it, so any application's dump reads
+# against that application's jar:
+#   OPTIONAL MATCH (j:Jar {path: $jar})-[:HAS_TYPE]->(t:JavaType {name: c.className})
+#   OPTIONAL MATCH (j:Jar {path: $jar})-[:HAS_FIELD]->(f:JavaField {key: hd.field})
 
 - name: HeapOverview
   description: "The analysed heap's totals: bytes, classes, instances, GC roots, duplicate-string waste."
@@ -45,7 +46,6 @@
     instances: { type: int, description: "Instances in the heap." }
     retainedBytes: { type: int, description: "Bytes the class's instances retain; -1 where unknown." }
     shallowBytes: { type: int, description: "Shallow bytes of its instances (histogram rows)." }
-    javaTypeId: "Key of the class in the application's jar (realm-java-code): `<jar>!<className>`."
   virtualJoins:
     - { anchorLabel: Heap, relationship: RETAINS, keyField: name, recordKeyField: heapKey, producer: heapRetainedClasses,
         description: "The classes retaining the most, with retainedBytes. Narrow with `{packageName: '…'}` or `{className: '…'}` in the MATCH: the filter is applied by jheapo." }
@@ -57,12 +57,12 @@
   properties:
     oid: { identity: true, description: "The object's id, decimal." }
     className: "Its class, binary name. Equals JavaType.name."
+    typeName: "The class as a binary name, = JavaType.name: `className` without the `class ` (and ` [Sticky Class]`) jheapo writes for a Class object."
     packageName: "Its class's package."
     shallowSize: { type: int, description: "Shallow bytes; 0 or -1 where not read." }
     retainedSize: { type: int, description: "Retained bytes; -1 where unknown (known for leak suspects and dominators)." }
     rank: { type: int, description: "Dominator-tree rank; -1 outside the tree." }
     forKey: "The class id (or heap) the object was listed for."
-    javaTypeId: "Key of the class in the application's jar (realm-java-code): `<jar>!<className>`."
   virtualJoins:
     - { anchorLabel: HeapClass, relationship: HAS_INSTANCE, keyField: classId, recordKeyField: forKey, producer: classInstances,
         description: "Up to 25 of a class's instances. Batched across classes." }
@@ -77,13 +77,12 @@
     id: { identity: true, description: "`<held oid><<holder oid>`." }
     oid: "The holder's oid."
     className: "The holder's class. Equals JavaType.name."
+    typeName: "The class as a binary name, = JavaType.name: `className` without the `class ` (and ` [Sticky Class]`) jheapo writes for a Class object."
     packageName: "The holder's package."
     shallowSize: { type: int, description: "The holder's shallow bytes." }
     through: { cardinality: LIST, description: "Every field (`Owner.field`) or array slot (`[i]`) of the holder that holds the object." }
-    field: "The first field among `through`, as `Owner.field`: JavaField.key. Empty when only array slots hold it."
+    field: "The first field among `through`, as `Owner.field` (jheapo's `static ` prefix removed): JavaField.key. Empty when only array slots hold it."
     forKey: "The oid of the object held."
-    javaTypeId: "Key of the class in the application's jar (realm-java-code): `<jar>!<className>`."
-    javaFieldId: "Key of the holding field in the application's jar: `<jar>!<Owner.field>`."
   virtualJoins:
     - { anchorLabel: HeapObject, relationship: HELD_BY, keyField: oid, recordKeyField: forKey, producer: objectHolders,
         description: "Who holds an object, and by which field. Batched; narrow with `{packageName: '…'}` to see only your own classes." }
@@ -98,11 +97,11 @@
     id: { identity: true, description: "`<owner oid>.<field>><held oid>`." }
     oid: "The held object's oid."
     className: "The held object's class."
+    typeName: "The class as a binary name, = JavaType.name: `className` without the `class ` (and ` [Sticky Class]`) jheapo writes for a Class object."
     packageName: "Its package."
-    heldBy: "The field, `Owner.field`. Equals JavaField.key."
+    heldBy: "The field as jheapo writes it, `Owner.field` (a static one prefixed `static `); filters pass to jheapo as written."
+    fieldKey: "`heldBy` without jheapo's `static ` prefix. Equals JavaField.key."
     forKey: "The owner's oid."
-    javaTypeId: "Key of the class in the application's jar (realm-java-code): `<jar>!<className>`."
-    javaFieldId: "Key of the holding field in the application's jar: `<jar>!<Owner.field>`."
   virtualJoins:
     - { anchorLabel: HeapObject, relationship: HAS_FIELD, keyField: oid, recordKeyField: forKey, producer: objectFields,
         description: "What an object's fields hold. Narrow with `{heldBy: 'Owner.field'}`: jheapo filters." }
@@ -118,32 +117,11 @@
     step: { type: int, description: "Position from the root, 0 first." }
     oid: "This step's object."
     className: "Its class. Equals JavaType.name."
+    typeName: "The class as a binary name, = JavaType.name: `className` without the `class ` (and ` [Sticky Class]`) jheapo writes for a Class object."
     packageName: "Its package."
     forKey: "The oid of the object whose path this is."
-    javaTypeId: "Key of the class in the application's jar (realm-java-code): `<jar>!<className>`."
   virtualJoins:
     - { anchorLabel: HeapObject, relationship: PATH_TO_ROOT, keyField: oid, recordKeyField: forKey, producer: objectPaths,
         description: "The object's path from its nearest GC root." }
     - { anchorLabel: HeapHolder, relationship: PATH_TO_ROOT, keyField: oid, recordKeyField: forKey, producer: objectPaths,
         description: "A holder's path from its nearest GC root." }
-
-# Joins INTO realm-java-code's types, keyed on the javaTypeId / javaFieldId every heap row computes.
-- name: JavaType
-  virtualJoins:
-    - { anchorLabel: HeapClass, relationship: COMPILED_AS, keyField: javaTypeId, recordKeyField: anchorKey, producer: heapJavaTypeByName,
-        description: "The class's compiled type in the application's jar (with realm-java-source-code, its source: DEFINED_IN)." }
-    - { anchorLabel: HeapObject, relationship: COMPILED_AS, keyField: javaTypeId, recordKeyField: anchorKey, producer: heapJavaTypeByName,
-        description: "The object's class, compiled, in the application's jar." }
-    - { anchorLabel: HeapHolder, relationship: COMPILED_AS, keyField: javaTypeId, recordKeyField: anchorKey, producer: heapJavaTypeByName,
-        description: "The holder's class, compiled." }
-    - { anchorLabel: HeapFieldValue, relationship: COMPILED_AS, keyField: javaTypeId, recordKeyField: anchorKey, producer: heapJavaTypeByName,
-        description: "The held object's class, compiled." }
-    - { anchorLabel: HeapPathStep, relationship: COMPILED_AS, keyField: javaTypeId, recordKeyField: anchorKey, producer: heapJavaTypeByName,
-        description: "This step's class, compiled: the steps that are the application's own." }
-
-- name: JavaField
-  virtualJoins:
-    - { anchorLabel: HeapHolder, relationship: HELD_IN, keyField: javaFieldId, recordKeyField: anchorKey, producer: heapJavaFieldByKey,
-        description: "The field of the holder that holds the object, as the jar declares it: then who writes it (ACCESSED_BY) and the code (SOURCE_AT)." }
-    - { anchorLabel: HeapFieldValue, relationship: HELD_IN, keyField: javaFieldId, recordKeyField: anchorKey, producer: heapJavaFieldByKey,
-        description: "The field holding this value, as the jar declares it." }

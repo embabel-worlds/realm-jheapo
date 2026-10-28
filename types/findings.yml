@@ -68,7 +68,6 @@
     collectionClass: "The outer collection."
     storedClass: "The collections stored in it."
     references: { type: int, description: "How many inner collections." }
-    javaFieldId: "Key of the field in the application's jar."
   virtualJoins:
     - { anchorLabel: Heap, relationship: NESTED_COLLECTION, keyField: name, recordKeyField: heapKey, producer: heapNestedCollections,
         description: "Collections of collections and the fields that hold them." }
@@ -90,7 +89,7 @@
         description: "Every thread in the dump." }
 
 - name: HeapStackFrame
-  description: "One frame of a thread's stack, innermost first (frame 0): the class, method, file and line it was executing. When the application's jar compiled the class: COMPILED_AS, the source line SOURCE_AT, the whole method DECLARED_AT."
+  description: "One frame of a thread's stack, innermost first (frame 0): the class, method, file and line it was executing. Its source, given the application's jar: pin `(l:SourceLine {key: $jar + '!' + f.sourcePath + '#' + toString(f.line) + '#' + f.method})`, then SOURCE_AT for the lines, DECLARED_AT for the whole method."
   properties:
     id: { identity: true, description: "Thread oid and frame number." }
     frame: { type: int, description: "Position, 0 innermost." }
@@ -105,10 +104,8 @@
     threadName: "The thread's name."
     threadState: "The thread's state."
     forKey: "The thread's oid."
-    javaTypeId: "Key of the class in the application's jar."
-    spanKey: "Key of the source line in the application's jar."
   virtualJoins:
-    - { anchorLabel: HeapThread, relationship: HAS_FRAME, keyField: oid, recordKeyField: forKey, producer: threadFrames,
+    - { anchorLabel: HeapThread, relationship: HAS_FRAME, keyField: oid, recordKeyField: forKey, producer: threadFrames, maxFanoutTotal: 50000,
         description: "A thread's stack. Batched across threads; narrow with `{packageName: '…'}` to the application's frames." }
 
 - name: HeapClassLoaderGroup
@@ -138,7 +135,6 @@
     totalFootprintBytes: { type: int, description: "Bytes the regions they occupy take." }
     totalWastedBytes: { type: int, description: "The difference." }
     sampleArrayOid: "One of the arrays."
-    javaTypeId: "Key of the owner in the application's jar."
   virtualJoins:
     - { anchorLabel: Heap, relationship: HUMONGOUS, keyField: name, recordKeyField: heapKey, producer: heapHumongousArrays,
         description: "Humongous arrays and what they waste." }
@@ -153,7 +149,6 @@
     entPct: { type: float, description: "Share entangled, percent." }
     shallow: { type: int, description: "Shallow bytes." }
     entangledBytes: { type: int, description: "Bytes held through the entanglement." }
-    javaTypeId: "Key of the class in the application's jar."
   virtualJoins:
     - { anchorLabel: Heap, relationship: ENTANGLED, keyField: name, recordKeyField: heapKey, producer: heapEntanglement,
         description: "The most entangled classes." }
@@ -172,27 +167,15 @@
     - { anchorLabel: Heap, relationship: HAS_FINALIZATION, keyField: name, recordKeyField: heapKey, producer: heapFinalization,
         description: "The finalization summary." }
 
-# Joins into the jar and source realms, keyed on what the rows above compute.
-- name: JavaType
-  virtualJoins:
-    - { anchorLabel: HeapStackFrame, relationship: COMPILED_AS, keyField: javaTypeId, recordKeyField: anchorKey, producer: heapJavaTypeByName,
-        description: "The frame's class, compiled in the application's jar." }
-    - { anchorLabel: HeapHumongousArray, relationship: COMPILED_AS, keyField: javaTypeId, recordKeyField: anchorKey, producer: heapJavaTypeByName,
-        description: "The class holding the humongous arrays." }
-    - { anchorLabel: HeapEntanglement, relationship: COMPILED_AS, keyField: javaTypeId, recordKeyField: anchorKey, producer: heapJavaTypeByName,
-        description: "The entangled class, compiled." }
-
-- name: JavaField
-  virtualJoins:
-    - { anchorLabel: HeapNestedCollection, relationship: HELD_IN, keyField: javaFieldId, recordKeyField: anchorKey, producer: heapJavaFieldByKey,
-        description: "The field holding the nested collection, as the jar declares it." }
-
+# A line of the application's source, pinned by key - `<jar>!<sourcePath>#<line>#<method>`, the
+# spanKey realm-java-code gives a member - so a stack frame reaches the line it was executing in
+# whichever jar the view is given. Nothing else declares SourceLine: it is only an anchor.
 - name: SourceSpan
   virtualJoins:
-    - { anchorLabel: HeapStackFrame, relationship: SOURCE_AT, keyField: spanKey, recordKeyField: anchorKey, producer: heapSourceSpan,
-        description: "The source lines around the line the frame was executing." }
+    - { anchorLabel: SourceLine, relationship: SOURCE_AT, keyField: key, recordKeyField: anchorKey, producer: heapSourceSpan,
+        description: "The source lines around one line of the application's code." }
 
 - name: JavaDeclaration
   virtualJoins:
-    - { anchorLabel: HeapStackFrame, relationship: DECLARED_AT, keyField: spanKey, recordKeyField: anchorKey, producer: heapDeclarationAt,
-        description: "The whole method the frame was in." }
+    - { anchorLabel: SourceLine, relationship: DECLARED_AT, keyField: key, recordKeyField: anchorKey, producer: heapDeclarationAt,
+        description: "The whole declaration - the method - that line is in." }

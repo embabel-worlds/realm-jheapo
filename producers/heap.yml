@@ -7,10 +7,17 @@
 # filters are PUSHED DOWN: `{className: …}` and `{packageName: …}` in a MATCH (or `IN [...]`) reach
 # jheapo as request parameters, and rows that do not match never leave it.
 #
-# HARDCODED FOR NOW: every row also carries the key of its counterpart in realm-java-code for ONE
-# jar, jheapo's own (jars/jheapo-0.1.0-SNAPSHOT.jar under the world's data/), so a heap row reaches
-# its JavaType or JavaField by a keyed join that fetches exactly that type or field. Point a heap at
-# another application by changing that path below.
+# NO JAR IS NAMED HERE. A heap row carries its class as a binary name (`className`; `typeName` on an
+# object, which also resolves jheapo's `class X` for a Class object) and, for a holder or a field
+# value, the holding field as `Owner.field` (`field`, `fieldKey`, with jheapo's `static ` prefix
+# removed) - exactly how realm-java-code names a JavaType (`name`) and a JavaField (`key`). A view
+# reaches the application's code by pinning the jar it is given, first, and matching on those names:
+#
+#   OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
+#   MATCH (h:Heap {name: 'current'})-[:RETAINS]->(c:HeapClass)
+#   OPTIONAL MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: c.className})
+#
+# so the same realm reads any application's dump against that application's jar.
 
 # ── Whole heap, from the Heap anchor ────────────────────────────────────────────────────────────
 
@@ -45,9 +52,6 @@
     - { property: className,   op: IN,     argPath: className, clause: "{values}" }
     - { property: packageName, op: EQUALS, argPath: package,   clause: ["{value}"] }
     - { property: packageName, op: IN,     argPath: package,   clause: "{values}" }
-  compute:
-    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.className"
-
 
 - name: heapHistogramClasses
   kind: remote
@@ -57,9 +61,6 @@
   echoKeyAs: heapKey
   records: "$.rows[*]"
   pushdown: []
-  compute:
-    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.className"
-
 
 - name: heapLeakSuspects
   kind: remote
@@ -74,8 +75,7 @@
     - { property: packageName, op: EQUALS, argPath: package,   clause: ["{value}"] }
     - { property: packageName, op: IN,     argPath: package,   clause: "{values}" }
   compute:
-    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.className"
-
+    typeName: "CASE WHEN r.className STARTS WITH 'class ' THEN split(substring(r.className, 6), ' ')[0] ELSE r.className END"
 
 - name: heapDominators
   kind: remote
@@ -92,8 +92,7 @@
 
 # ── Walks, batched by key ───────────────────────────────────────────────────────────────────────
   compute:
-    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.className"
-
+    typeName: "CASE WHEN r.className STARTS WITH 'class ' THEN split(substring(r.className, 6), ' ')[0] ELSE r.className END"
 
 - name: classInstances
   kind: remote
@@ -108,8 +107,7 @@
     - { property: packageName, op: EQUALS, argPath: package,   clause: ["{value}"] }
     - { property: packageName, op: IN,     argPath: package,   clause: "{values}" }
   compute:
-    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.className"
-
+    typeName: "CASE WHEN r.className STARTS WITH 'class ' THEN split(substring(r.className, 6), ' ')[0] ELSE r.className END"
 
 - name: objectHolders
   kind: remote
@@ -123,10 +121,9 @@
     - { property: packageName, op: EQUALS, argPath: package,   clause: ["{value}"] }
     - { property: packageName, op: IN,     argPath: package,   clause: "{values}" }
   compute:
-    javaFieldId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + head([t IN r.through WHERE NOT t STARTS WITH '['])"
-    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.className"
     id: "r.forKey + '<' + r.oid"
-    field: "head([t IN r.through WHERE NOT t STARTS WITH '['])"
+    field: "CASE WHEN head([t IN r.through WHERE NOT t STARTS WITH '[']) STARTS WITH 'static ' THEN substring(head([t IN r.through WHERE NOT t STARTS WITH '[']), 7) ELSE head([t IN r.through WHERE NOT t STARTS WITH '[']) END"
+    typeName: "CASE WHEN r.className STARTS WITH 'class ' THEN split(substring(r.className, 6), ' ')[0] ELSE r.className END"
 
 - name: objectFields
   kind: remote
@@ -142,9 +139,9 @@
     - { property: heldBy,      op: EQUALS, argPath: field,     clause: ["{value}"] }
     - { property: heldBy,      op: IN,     argPath: field,     clause: "{values}" }
   compute:
-    javaFieldId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.heldBy"
-    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.className"
     id: "r.forKey + '.' + r.heldBy + '>' + r.oid"
+    fieldKey: "CASE WHEN r.heldBy STARTS WITH 'static ' THEN substring(r.heldBy, 7) ELSE r.heldBy END"
+    typeName: "CASE WHEN r.className STARTS WITH 'class ' THEN split(substring(r.className, 6), ' ')[0] ELSE r.className END"
 
 - name: objectPaths
   kind: remote
@@ -154,10 +151,5 @@
   records: "$[*]"
   pushdown: []
   compute:
-    javaTypeId: "'jars/jheapo-0.1.0-SNAPSHOT.jar!' + r.className"
+    typeName: "CASE WHEN r.className STARTS WITH 'class ' THEN split(substring(r.className, 6), ' ')[0] ELSE r.className END"
     id: "r.forKey + '#' + toString(r.step)"
-
-# ── Into realm-java-code's jar, by key (the jar is hardcoded above) ─────────────────────────────
-
-- { name: heapJavaTypeByName, kind: jar, emit: types,  by: name }
-- { name: heapJavaFieldByKey, kind: jar, emit: fields, by: key }

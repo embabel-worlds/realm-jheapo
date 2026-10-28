@@ -42,6 +42,9 @@
   .top { display: flex; align-items: center; gap: 18px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, #121722, var(--bg)); }
   .brand { font-weight: 700; letter-spacing: .2px; font-size: 15px; white-space: nowrap; }
   .brand span { color: var(--accent); }
+  .jar { display: flex; align-items: center; gap: 6px; color: var(--dim); white-space: nowrap; }
+  .jar input { width: 230px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; color: var(--text); font: 12px var(--mono); }
+  .jar input:focus { outline: none; border-color: var(--accent); }
   .tiles { display: flex; gap: 10px; flex-wrap: wrap; }
   .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; min-width: 96px; }
   .tile b { display: block; font-size: 15px; }
@@ -133,6 +136,7 @@
 <div class="top">
   <div class="brand">Heap <span>Lens</span></div>
   <button class="btn" id="takeBtn" title="What matters, and what to change">Takeaways</button>
+  <label class="jar" title="The application's jar under the world's data/, as realm-java-code reads it. Empty: the heap alone.">Jar <input id="jar" placeholder="jars/app.jar" spellcheck="false" autocomplete="off"></label>
   <div class="tiles" id="tiles"><div class="muted"><span class="spin"></span>Reading the heap…</div></div>
 </div>
 <div class="grid">
@@ -163,14 +167,25 @@
 (function () {
   'use strict';
   var $ = function (id) { return document.getElementById(id); };
-  var state = { tab: 'retainers', mine: false, classId: null, className: null, oid: null };
+  var state = { tab: 'retainers', mine: false, jar: '', classId: null, className: null, oid: null };
+  /* The views that reach the application's code take `jar`; a view refuses a param it does not declare. */
+  var JAR_VIEWS = {};
+  ['HeapAppRetainers', 'HeapAppHistogram', 'HeapAppLeakSuspects', 'HeapAppHolders', 'HeapAppFields', 'HeapAppPath',
+   'HeapAppFieldCode', 'HeapAppFieldGrowth', 'HeapAppClassSource', 'HeapAppClassHolders',
+   'HeapFindingsNestedCollections', 'HeapFindingsBlockedThreads', 'HeapFindingsStacksInYourCode', 'HeapFindingsStaticPins',
+   'HeapFindingsIdentityKeys', 'HeapFindingsHumongous', 'HeapFindingsEntanglement', 'HeapFindingsYourDominators'
+  ].forEach(function (n) { JAR_VIEWS[n] = true; });
   var lists = {};
 
   /* ── plumbing ──────────────────────────────────────────────────────────────────────────── */
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>'"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]; }); }
   function rowsOf(r) { if (!r) return []; if (Array.isArray(r)) return r; if (Array.isArray(r.rows)) return r.rows; if (r.data && Array.isArray(r.data.rows)) return r.data.rows; if (Array.isArray(r.data)) return r.data; return []; }
   function warningsOf(r) { if (!r) return []; if (Array.isArray(r.warnings)) return r.warnings; if (r.data && Array.isArray(r.data.warnings)) return r.data.warnings; return []; }
-  function view(name, args) { return embabel.views.invoke(name, args || {}).then(function (r) { return { rows: rowsOf(r), warnings: warningsOf(r) }; }); }
+  function view(name, args) {
+    var a = {}; Object.keys(args || {}).forEach(function (k) { a[k] = args[k]; });
+    if (JAR_VIEWS[name]) a.jar = state.jar;
+    return embabel.views.invoke(name, a).then(function (r) { return { rows: rowsOf(r), warnings: warningsOf(r) }; });
+  }
   function bytes(n) { if (n == null || n < 0) return '—'; var u = ['B', 'KB', 'MB', 'GB']; var i = 0; n = Number(n); while (n >= 1024 && i < 3) { n /= 1024; i++; } return (i ? n.toFixed(1) : n) + ' ' + u[i]; }
   function num(n) { return n == null ? '—' : Number(n).toLocaleString(); }
   function shortName(cn) { if (!cn) return ''; var s = String(cn).split(' ')[0]; var i = s.lastIndexOf('.'); return i < 0 ? s : s.slice(i + 1); }
@@ -496,7 +511,7 @@
       '<div class="pad" id="tprogress"></div></div></div>';
     var t0 = Date.now();
     var clock = setInterval(function () { var el = $('tstate'); if (!el) return clearInterval(clock); el.textContent = Math.round((Date.now() - t0) / 1000) + ' s'; }, 1000);
-    embabel.lenses.invoke('heap-takeaways', {}, { state: $('tprogress') }).then(function (r) {
+    embabel.lenses.invoke('heap-takeaways', { jar: state.jar }, { state: $('tprogress') }).then(function (r) {
       clearInterval(clock);
       var out = lensData(r) || {};
       if (out.error || !out.text) {
@@ -524,6 +539,13 @@
   addEventListener('keydown', function (e) { if (e.key === 'm' && !/input|textarea/i.test(e.target.tagName)) { $('mine').click(); } });
   addEventListener('hashchange', route);
   try { if (localStorage.getItem('heap-lens.mine')) { $('mine').checked = true; state.mine = true; } } catch (e) {}
+  try { state.jar = localStorage.getItem('heap-lens.jar') || ''; } catch (e) {}
+  $('jar').value = state.jar;
+  $('jar').onchange = function () {
+    state.jar = $('jar').value.trim();
+    try { localStorage.setItem('heap-lens.jar', state.jar); } catch (e) {}
+    lists = {}; findingRows = {}; list(); route();
+  };
   $('takeBtn').onclick = function () { location.hash = '#/takeaways'; };
   header(); list();
   if (location.hash) route();

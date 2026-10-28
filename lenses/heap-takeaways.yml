@@ -15,6 +15,10 @@ description: >-
   bad, and what to change in the code - written by a model from the measured findings and the
   source behind them. "What should I fix in this heap", "summarise this heap dump".
 params:
+  - name: jar
+    type: STRING
+    label: The application's jar under the world's data/ (e.g. jars/app.jar); empty reads the heap alone
+    required: false
   - name: role
     type: STRING
     label: Model role (Settings → LLM roles)
@@ -23,9 +27,16 @@ spec:
   kind: cypherscript
   script: |
     const role = String(lensArgs.role || "summary");
+    const jar = String(lensArgs.jar || "");
+    // The views that reach the application's code take `jar`; a view refuses a param it does not declare.
+    const JAR_VIEWS = new Set(["HeapAppRetainers", "HeapAppClassHolders", "HeapAppFieldCode", "HeapAppFieldGrowth",
+      "HeapAppClassSource", "HeapFindingsNestedCollections", "HeapFindingsBlockedThreads", "HeapFindingsStacksInYourCode",
+      "HeapFindingsStaticPins", "HeapFindingsIdentityKeys", "HeapFindingsHumongous", "HeapFindingsEntanglement",
+      "HeapFindingsYourDominators"]);
     const run = async (name, params) => {
       try {
-        const r = await gateway.view.run({ name, params: JSON.stringify(params || {}) });
+        const p = Object.assign({}, params || {}, JAR_VIEWS.has(name) ? { jar } : {});
+        const r = await gateway.view.run({ name, params: JSON.stringify(p) });
         return (r && r.rows) || [];
       } catch (e) { return []; }
     };

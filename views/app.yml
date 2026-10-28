@@ -1,31 +1,41 @@
 # The views the Heap Lens app (apps/heap-lens.html) is built on: each answers one panel, one hop
 # deep, from a pinned id, so the app drills anywhere with one call and never sends Cypher of its
-# own. Hops into the jar are keyed (COMPILED_AS, HELD_IN) or pinned (`{key: $field}`), so each
-# fetches exactly what it names. The jar is the one the producers hardcode for now.
+# own. Every view that reaches code takes `jar`, the application's jar as realm-java-code reads it
+# (e.g. `jars/app.jar` under the world's data/), and pins it: a class by `{name: …}`, a field by
+# `{key: …}`. Given `jar: null` they answer from the heap alone, with nothing marked as the application's.
 
 - name: HeapAppRetainers
   description: "Every class jheapo reports as retaining heap, largest first, marking the application's own (compiled in its jar)."
+  params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (h:Heap {name: 'current'})-[:RETAINS]->(c:HeapClass)
-    OPTIONAL MATCH (c)-[:COMPILED_AS]->(t:JavaType)
+    OPTIONAL MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: c.className})
     RETURN c.classId AS classId, c.className AS className, c.packageName AS packageName, c.instances AS instances,
            c.retainedBytes AS retainedBytes, t IS NOT NULL AS inApp, t.hashCodeFrom AS hashCodeFrom
     ORDER BY retainedBytes DESC
 
 - name: HeapAppHistogram
   description: "The heap's top classes by shallow bytes, with instance counts, marking the application's own."
+  params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (h:Heap {name: 'current'})-[:HAS_CLASS]->(c:HeapClass)
-    OPTIONAL MATCH (c)-[:COMPILED_AS]->(t:JavaType)
+    OPTIONAL MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: c.className})
     RETURN c.classId AS classId, c.className AS className, c.packageName AS packageName, c.instances AS instances,
            c.shallowBytes AS shallowBytes, t IS NOT NULL AS inApp
     ORDER BY shallowBytes DESC
 
 - name: HeapAppLeakSuspects
   description: "The objects retaining the most, with retained bytes, marking the application's own."
+  params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (h:Heap {name: 'current'})-[:LEAK_SUSPECT]->(o:HeapObject)
-    OPTIONAL MATCH (o)-[:COMPILED_AS]->(t:JavaType)
+    OPTIONAL MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: o.typeName})
     RETURN o.oid AS oid, o.className AS className, o.retainedSize AS retainedSize, t IS NOT NULL AS inApp
     ORDER BY retainedSize DESC
 
@@ -41,11 +51,13 @@
 - name: HeapAppHolders
   description: "Who holds one object, by which field, with the field as the jar declares it."
   params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
     oid: { type: string, description: "The object's id." }
   cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (o:HeapObject {oid: $oid})-[:HELD_BY]->(hd:HeapHolder)
-    OPTIONAL MATCH (hd)-[:HELD_IN]->(f:JavaField)
-    OPTIONAL MATCH (hd)-[:COMPILED_AS]->(t:JavaType)
+    OPTIONAL MATCH (j)-[:HAS_FIELD]->(f:JavaField {key: hd.field})
+    OPTIONAL MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: hd.typeName})
     RETURN hd.oid AS oid, hd.className AS className, hd.shallowSize AS shallowSize, hd.through AS through, hd.field AS field,
            f.genericType AS declaredAs, f.isStatic AS isStatic, t IS NOT NULL AS inApp
     ORDER BY inApp DESC, className
@@ -53,20 +65,24 @@
 - name: HeapAppFields
   description: "What one object's fields hold."
   params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
     oid: { type: string, description: "The object's id." }
   cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (o:HeapObject {oid: $oid})-[:HAS_FIELD]->(v:HeapFieldValue)
-    OPTIONAL MATCH (v)-[:COMPILED_AS]->(t:JavaType)
+    OPTIONAL MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: v.typeName})
     RETURN v.oid AS oid, v.className AS className, v.heldBy AS field, t IS NOT NULL AS inApp
     ORDER BY field
 
 - name: HeapAppPath
   description: "One object's path from its GC root, numbered, each step marked when the application's jar compiled it, with its source file."
   params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
     oid: { type: string, description: "The object's id." }
   cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (o:HeapObject {oid: $oid})-[:PATH_TO_ROOT]->(p:HeapPathStep)
-    OPTIONAL MATCH (p)-[:COMPILED_AS]->(t:JavaType)
+    OPTIONAL MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: p.typeName})
     OPTIONAL MATCH (t)-[:DEFINED_IN]->(s:JavaSource)
     RETURN p.step AS step, p.oid AS oid, p.className AS className, t IS NOT NULL AS inApp, s.path AS source
     ORDER BY step
@@ -74,9 +90,11 @@
 - name: HeapAppFieldCode
   description: "One field of the application's jar: how it is declared, and every method that reads or writes it, with the code at each."
   params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
     field: { type: string, description: "The field as Owner.field." }
   cypher: |
-    MATCH (j:Jar {path: 'jars/jheapo-0.1.0-SNAPSHOT.jar'})-[:HAS_FIELD]->(f:JavaField {key: $field})
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
+    MATCH (j)-[:HAS_FIELD]->(f:JavaField {key: $field})
     OPTIONAL MATCH (f)-[:ACCESSED_BY]->(a:JavaFieldAccess)
     OPTIONAL MATCH (a)-[:SOURCE_AT]->(s:SourceSpan)
     RETURN f.key AS field, f.genericType AS declaredAs, f.isStatic AS isStatic, f.isFinal AS isFinal, f.container AS container,
@@ -86,9 +104,11 @@
 - name: HeapAppFieldGrowth
   description: "Where one field's container grows: each add or put made on the field, as source writes it, with what is passed."
   params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
     field: { type: string, description: "The field as Owner.field." }
   cypher: |
-    MATCH (j:Jar {path: 'jars/jheapo-0.1.0-SNAPSHOT.jar'})-[:HAS_FIELD]->(f:JavaField {key: $field})
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
+    MATCH (j)-[:HAS_FIELD]->(f:JavaField {key: $field})
     MATCH (f)-[:ACCESSED_BY]->(a:JavaFieldAccess)-[:SAME_METHOD_CALL]->(call:JavaMethodCall)-[:AT_SITE]->(cs:JavaCallSite)
     WHERE call.calleeName IN ['put', 'putIfAbsent', 'computeIfAbsent', 'compute', 'merge', 'add', 'addAll', 'offer', 'push', 'set']
       AND (cs.receiver = f.name OR cs.receiver = 'this.' + f.name)
@@ -98,9 +118,11 @@
 - name: HeapAppClassSource
   description: "One class of the application's jar as source declares it: its file and every declaration in it, with extent and text."
   params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
     className: { type: string, description: "Binary class name." }
   cypher: |
-    MATCH (j:Jar {path: 'jars/jheapo-0.1.0-SNAPSHOT.jar'})-[:HAS_TYPE]->(t:JavaType {name: $className})-[:DEFINED_IN]->(s:JavaSource)
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
+    MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: $className})-[:DEFINED_IN]->(s:JavaSource)
     OPTIONAL MATCH (s)-[:DECLARES]->(d:JavaDeclaration)
     RETURN s.path AS source, s.lines AS lines, d.kind AS kind, d.name AS name, d.owner AS owner, d.signature AS signature,
            d.fromLine AS fromLine, d.toLine AS toLine, d.javadoc AS javadoc, d.text AS code
@@ -109,10 +131,12 @@
 - name: HeapAppClassHolders
   description: "Who holds a class's instances (a sample of 25), grouped by holder class and field, the application's own first: the convergence points."
   params:
+    jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
     classId: { type: string, description: "The class's id." }
   cypher: |
+    OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (c:HeapClass {classId: $classId})-[:HAS_INSTANCE]->(o:HeapObject)-[:HELD_BY]->(hd:HeapHolder)
-    OPTIONAL MATCH (hd)-[:COMPILED_AS]->(t:JavaType)
+    OPTIONAL MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: hd.typeName})
     RETURN hd.className AS holder, hd.field AS field, count(DISTINCT o) AS objects, t IS NOT NULL AS inApp,
            collect(DISTINCT hd.oid)[0..5] AS holderOids
     ORDER BY inApp DESC, objects DESC
