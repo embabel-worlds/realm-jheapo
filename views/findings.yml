@@ -1,8 +1,12 @@
 # Findings: one view per classic Java memory or concurrency problem. Each is written to say something
 # on ANY heap — an empty answer is itself the finding ("no thread is blocked", "nothing is pinned by
 # a static") — and each carries what it finds into the application's jar and source where that is
-# where the answer lives. The application's jar is the view's `jar` param; given `jar: null` a
+# where the answer lives. The application's jar is the view's `jar` param, pinned first; empty, a
 # finding answers from the heap alone, and nothing is marked as the application's.
+#
+# A hop from the jar keyed on a heap row (`{name: c.className}`) is always an OPTIONAL MATCH, then
+# filtered (`WITH … WHERE t IS NOT NULL`) where only the application's rows are wanted. Written as
+# a plain MATCH, the engine plans it before the row exists and refuses: "Variable `c` not defined".
 
 - name: HeapFindingsWaste
   description: "Every kind of waste jheapo measured, largest first: what it is, the bytes, how sure, the class it points at, whether that is the application's own code, and the remedy."
@@ -81,7 +85,8 @@
   cypher: |
     OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (h:Heap {name: 'current'})-[:HAS_THREAD]->(t:HeapThread)-[:HAS_FRAME]->(f:HeapStackFrame)
-    MATCH (j)-[:HAS_TYPE]->(c:JavaType {name: f.className})
+    OPTIONAL MATCH (j)-[:HAS_TYPE]->(c:JavaType {name: f.className})
+    WITH j, t, f, c WHERE c IS NOT NULL
     WITH j, t, f, CASE WHEN $jar <> '' AND f.line > 0 AND f.sourcePath IS NOT NULL THEN $jar + '!' + f.sourcePath + '#' + toString(f.line) + '#' + CASE f.method WHEN '<init>' THEN last(split(last(split(f.className, '.')), '$')) ELSE f.method END END AS lineKey
     OPTIONAL MATCH (l:SourceLine {key: lineKey})-[:SOURCE_AT]->(s:SourceSpan)
     RETURN t.name AS thread, t.state AS state, f.frame AS frame, f.className + '.' + f.method AS method, f.line AS line,
@@ -103,7 +108,8 @@
   cypher: |
     OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (h:Heap {name: 'current'})-[:DOMINATES]->(o:HeapObject)-[:HELD_BY]->(hd:HeapHolder)
-    MATCH (j)-[:HAS_FIELD]->(f:JavaField {key: hd.field, isStatic: true})
+    OPTIONAL MATCH (j)-[:HAS_FIELD]->(f:JavaField {key: hd.field, isStatic: true})
+    WITH o, f WHERE f IS NOT NULL
     RETURN o.className AS retainer, o.retainedSize AS retainedBytes, f.key AS staticField, f.genericType AS declaredAs, f.isFinal AS final
     ORDER BY retainedBytes DESC
 
@@ -122,7 +128,8 @@
   cypher: |
     OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (h:Heap {name: 'current'})-[:HAS_CLASS]->(c:HeapClass)
-    MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: c.className, hashCodeFrom: 'java.lang.Object', kind: 'class'})
+    OPTIONAL MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: c.className, hashCodeFrom: 'java.lang.Object', kind: 'class'})
+    WITH c, t WHERE t IS NOT NULL
     MATCH (c)-[:HAS_INSTANCE]->(o:HeapObject)-[:HELD_BY]->(hd:HeapHolder)
     WHERE any(x IN hd.through WHERE x ENDS WITH '$Node.key' OR x ENDS WITH '$Entry.key')
     RETURN c.className AS keyClass, count(DISTINCT o) AS keysInSample, collect(DISTINCT hd.className) AS heldAsKeyOf, t.equalsFrom AS equalsFrom
@@ -173,7 +180,8 @@
   cypher: |
     OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (h:Heap {name: 'current'})-[:DOMINATES]->(o:HeapObject)-[:PATH_TO_ROOT]->(p:HeapPathStep)
-    MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: p.typeName})
+    OPTIONAL MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: p.typeName})
+    WITH j, o, p, t WHERE t IS NOT NULL
     WITH j, o, min(p.step) AS firstStep
     MATCH (o)-[:PATH_TO_ROOT]->(p:HeapPathStep {step: firstStep})
     RETURN o.className AS retainer, o.retainedSize AS retainedBytes, p.className AS throughYourClass, firstStep AS atStep

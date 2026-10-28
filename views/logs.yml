@@ -13,7 +13,9 @@
     MATCH (me:AssistantUser)-[:HAS_LOG_EVENT]->(e:LogEvent {hasTrace: true})-[:HAS_FRAME]->(f:JavaStackFrame {inJar: true})
     WITH j, collect(DISTINCT f.className + '.' + f.method) AS failing
     MATCH (h:Heap {name: 'current'})-[:RETAINS]->(c:HeapClass)
-    MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: c.className})-[:DECLARES_FIELD]->(fld:JavaField)-[:ACCESSED_BY]->(a:JavaFieldAccess {access: 'WRITE'})
+    OPTIONAL MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: c.className})
+    WITH j, c, t, failing WHERE t IS NOT NULL
+    MATCH (t)-[:DECLARES_FIELD]->(fld:JavaField)-[:ACCESSED_BY]->(a:JavaFieldAccess {access: 'WRITE'})
     WITH j, c, fld, a, failing, split(a.method, '(')[0] AS writer
     RETURN c.className AS retainer, c.instances AS instances, c.retainedBytes AS retained, fld.name AS field, fld.type AS type,
            writer, a.lines AS lines, writer IN failing AS inLoggedFailure
