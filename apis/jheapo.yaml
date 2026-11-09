@@ -79,12 +79,9 @@ paths:
       summary: The classes retaining the most bytes.
       parameters:
       - $ref: '#/components/parameters/n'
-      - &id001
-        $ref: '#/components/parameters/className'
-      - &id002
-        $ref: '#/components/parameters/package'
-      - &id003
-        $ref: '#/components/parameters/classPrefix'
+      - $ref: '#/components/parameters/className'
+      - $ref: '#/components/parameters/package'
+      - $ref: '#/components/parameters/classPrefix'
       responses:
         '200':
           description: Classes
@@ -119,9 +116,9 @@ paths:
       summary: The objects retaining the most, as leak suspects, with retained size.
       parameters:
       - $ref: '#/components/parameters/n'
-      - *id001
-      - *id002
-      - *id003
+      - $ref: '#/components/parameters/className'
+      - $ref: '#/components/parameters/package'
+      - $ref: '#/components/parameters/classPrefix'
       responses:
         '200':
           description: Objects
@@ -143,9 +140,9 @@ paths:
           default: -1
         description: The rank of the parent node, as a previous answer gave it.
       - $ref: '#/components/parameters/n'
-      - *id001
-      - *id002
-      - *id003
+      - $ref: '#/components/parameters/className'
+      - $ref: '#/components/parameters/package'
+      - $ref: '#/components/parameters/classPrefix'
       responses:
         '200':
           description: Objects
@@ -272,15 +269,16 @@ paths:
       parameters:
       - $ref: '#/components/parameters/oid'
       responses:
-        '200': &id005
+        '200':
           description: Rows, each with forKey and packageName
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/HeapObjects'
-        '403': &id004
+        '403':
           $ref: '#/components/responses/Error'
-        '500': *id004
+        '500':
+          $ref: '#/components/responses/Error'
   /batch/instances:
     get:
       operationId: batchInstances
@@ -293,14 +291,22 @@ paths:
         schema:
           type: integer
           default: 0
-      - *id001
-      - *id002
-      - *id003
+      - $ref: '#/components/parameters/className'
+      - $ref: '#/components/parameters/package'
+      - $ref: '#/components/parameters/classPrefix'
       responses:
-        '200': *id005
-        '400': *id004
-        '403': *id004
-        '500': *id004
+        '200':
+          description: Rows, each with forKey and packageName
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeapObjects'
+        '400':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
   /batch/holders:
     get:
       operationId: batchHolders
@@ -308,14 +314,22 @@ paths:
         slots it holds it by, and forKey the object held.
       parameters:
       - $ref: '#/components/parameters/oids'
-      - *id001
-      - *id002
-      - *id003
+      - $ref: '#/components/parameters/className'
+      - $ref: '#/components/parameters/package'
+      - $ref: '#/components/parameters/classPrefix'
       responses:
-        '200': *id005
-        '400': *id004
-        '403': *id004
-        '500': *id004
+        '200':
+          description: Rows, each with forKey and packageName
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeapObjects'
+        '400':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
   /batch/fields:
     get:
       operationId: batchFields
@@ -324,14 +338,22 @@ paths:
       parameters:
       - $ref: '#/components/parameters/oids'
       - $ref: '#/components/parameters/field'
-      - *id001
-      - *id002
-      - *id003
+      - $ref: '#/components/parameters/className'
+      - $ref: '#/components/parameters/package'
+      - $ref: '#/components/parameters/classPrefix'
       responses:
-        '200': *id005
-        '400': *id004
-        '403': *id004
-        '500': *id004
+        '200':
+          description: Rows, each with forKey and packageName
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeapObjects'
+        '400':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
   /batch/paths:
     get:
       operationId: batchPaths
@@ -340,10 +362,18 @@ paths:
       parameters:
       - $ref: '#/components/parameters/oids'
       responses:
-        '200': *id005
-        '400': *id004
-        '403': *id004
-        '500': *id004
+        '200':
+          description: Rows, each with forKey and packageName
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeapObjects'
+        '400':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
   /batch/frames:
     get:
       operationId: batchFrames
