@@ -171,20 +171,15 @@
 # spanKey realm-java-code gives a member - so a stack frame reaches the line it was executing in
 # whichever jar the view is given. Nothing else declares SourceLine: it is only an anchor.
 #
-# SourceSpan and JavaDeclaration belong to realm-code-model and realm-java-source-code; they are
-# restated here, description and identity as their owners give them, so this realm loads without them.
+# SourceSpan belongs to realm-code-model and JavaDeclaration to realm-java-source-code, both required:
+# their owners give the description and the identity. Restating either here would be a second
+# declaration of the owner's type, and the realm would load degraded. Only the joins are added.
 - name: SourceSpan
-  description: "A window of numbered source lines around one line - the code at a method, a call or a field access - identified by id. `matches` is false when the name the compiled code expects is not on those lines: the source is not the artifact's version."
-  properties:
-    id: { identity: true, description: "The file's id, `#`, the line range." }
   virtualJoins:
     - { anchorLabel: SourceLine, relationship: SOURCE_AT, keyField: key, recordKeyField: anchorKey, producer: heapSourceSpan,
         description: "The source lines around one line of the application's code, 4 lines either side, read from the jar's -sources.jar or the source roots: one read per pinned line." }
 
 - name: JavaDeclaration
-  description: "A declaration in a Java file's syntax tree, identified by id - class, interface, enum, record, annotation, field, constructor, method or initializer - with its exact extent, signature, modifiers, annotations, Javadoc and (for members) full numbered text."
-  properties:
-    id: { identity: true, description: "`<root>!<path>#<kind>:<name>@<fromLine>`." }
   virtualJoins:
     - { anchorLabel: SourceLine, relationship: DECLARED_AT, keyField: key, recordKeyField: anchorKey, producer: heapDeclarationAt,
         description: "The whole declaration - the method - that one line is in, from the source roots: use it when the window SOURCE_AT gives is too narrow to read the method." }
