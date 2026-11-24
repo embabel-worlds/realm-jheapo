@@ -9,6 +9,14 @@ description: |
   Requires a jheapo serving REST (`bin/jheapo-rest.sh <dump.hprof>`, port 7071) reachable from the
   appliance; drill-downs need a licensed jheapo.
 version: 0.2.1
+# Every view that reaches code reads realm-java-code's and realm-java-source-code's labels, and two
+# read realm-jvm-logs'; realm-code-model declares the parents their types extend. Without them those
+# views can never return a row, so the realm would load degraded.
+requires:
+  code-model: "[0.1.0,1.0.0)"
+  java-code: "[0.1.0,1.0.0)"
+  java-source-code: "[0.1.0,1.0.0)"
+  jvm-logs: "[0.1.0,1.0.0)"
 maturity: experimental
 author: Kirk Pepperdine
 tags:

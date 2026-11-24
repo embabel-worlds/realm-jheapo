@@ -26,12 +26,13 @@ embabel upgrade          # latest published image and CLI
 
 ### 2. The realms
 
-This realm joins into three others. Install them from the directory:
+This realm requires four others (realm.yml `requires`); the installer brings them. From the directory:
 
 ```
+install_realm("embabel-worlds/realm-code-model")
 install_realm("embabel-worlds/realm-java-code")
 install_realm("embabel-worlds/realm-java-source-code")
-install_realm("embabel-worlds/realm-jvm-logs")        # optional: the heap read against the logs
+install_realm("embabel-worlds/realm-jvm-logs")        # the heap read against the logs
 install_realm("embabel-worlds/realm-jheapo")
 ```
 
