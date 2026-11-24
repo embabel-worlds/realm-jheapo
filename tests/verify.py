@@ -88,7 +88,7 @@ for f in sorted(glob.glob("views/*.yml")):
             print("       %s" % json.dumps({k: v for k, v in env.items() if k != "data"})[:1500])
 
 def kg(cypher, params):
-    req = urllib.request.Request("%s/api/v1/admin/kg/execute" % APPLIANCE, data=json.dumps({"cypher": cypher, "params": params}).encode(),
+    req = urllib.request.Request("%s/api/v1/admin/kg/execute" % APPLIANCE, data=json.dumps({"cypher": re.sub(r"\$(\w+)", lambda m: json.dumps(params[m.group(1)]).replace('"', "'"), cypher)}).encode(),
                                  headers=HEADERS, method="POST")
     try:
         return json.load(urllib.request.urlopen(req, timeout=600))
