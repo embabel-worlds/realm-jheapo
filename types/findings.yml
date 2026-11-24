@@ -176,10 +176,10 @@
 # declaration of the owner's type, and the realm would load degraded. Only the joins are added.
 - name: SourceSpan
   virtualJoins:
-    - { anchorLabel: SourceLine, relationship: SOURCE_AT, keyField: key, recordKeyField: anchorKey, producer: heapSourceSpan,
-        description: "The source lines around one line of the application's code, 4 lines either side, read from the jar's -sources.jar or the source roots: one read per pinned line." }
+    - { anchorLabel: SourceLine, relationship: SOURCE_AT, keyField: key, recordKeyField: anchorKey, producer: javaSourceSpan,
+        description: "The source lines around one line of the application's code, 6 lines either side, read by realm-java-source-code from the jar's -sources.jar or its source roots: one read per pinned line." }
 
 - name: JavaDeclaration
   virtualJoins:
-    - { anchorLabel: SourceLine, relationship: DECLARED_AT, keyField: key, recordKeyField: anchorKey, producer: heapDeclarationAt,
-        description: "The whole declaration - the method - that one line is in, from the source roots: use it when the window SOURCE_AT gives is too narrow to read the method." }
+    - { anchorLabel: SourceLine, relationship: DECLARED_AT, keyField: key, recordKeyField: anchorKey, producer: javaDeclarationAt,
+        description: "The whole declaration - the method - that one line is in, read by realm-java-source-code from the source roots: use it when the window SOURCE_AT gives is too narrow to read the method." }
