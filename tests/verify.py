@@ -63,14 +63,24 @@ print("  heapBytes=%s classes=%s threads=%d retainers=%d suspects=%d top=%s" % (
 print("== L1: every view answers by name, on its defaults ==")
 required = {"classId": top["classId"], "oid": oid, "className": top["className"], "class": top["className"],
             "package": top["packageName"], "field": "java.util.HashMap.table", "subject": top["className"],
-            "center": top["className"], "jar": ""}
+            "center": top["className"], "jar": "data/jars/no-such-application.jar"}
+# Views that read the application's code have nothing to match without a jar the world holds; the
+# engine then answers FETCHED_NOT_MATCHED (heap rows fetched, none of them the application's), which
+# is the honest answer here and is the only refusal accepted, and only from these views.
+needs_jar = {"HeapFindingsStacksInYourCode", "HeapFindingsStaticPins", "HeapFindingsIdentityKeys",
+             "HeapFindingsYourDominators", "HeapFieldGrowthCode", "HeapCenterLifecycle", "HeapAppFieldGrowth",
+             "HeapAppFieldCode", "HeapAppClassSource", "HeapConcernCode", "JheapoRetainerWritersInFailures",
+             "JheapoFailingCodeOnLiveStacks"}
 V = {}
 for f in sorted(glob.glob("views/*.yml")):
     for name, params in re.findall(r"^- name: (\w+)\n(?:  description:.*\n)?(?:  params:\n((?:    .*\n)+))?", open(f).read(), re.M):
         needed = {p: required[p] for p in re.findall(r"^    (\w+): \{[^}]*required: true", params, re.M)}
         env = invoke(name, needed)
         V[name] = env
-        check("%s answers" % name, None, env.get("error") or (env.get("errors") or None))
+        problem = env.get("error") or (env.get("errors") or None)
+        if name in needs_jar and isinstance(problem, dict) and problem.get("reason") == "FETCHED_NOT_MATCHED":
+            problem = None
+        check("%s answers" % name, None, problem)
 
 print("== L2: the views reconcile with jheapo ==")
 o = rows(V["HeapOverviewTotals"])
