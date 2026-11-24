@@ -63,7 +63,10 @@ print("  heapBytes=%s classes=%s threads=%d retainers=%d suspects=%d top=%s" % (
 print("== L1: every view answers by name, on its defaults ==")
 required = {"classId": top["classId"], "oid": oid, "className": top["className"], "class": top["className"],
             "package": top["packageName"], "field": "java.util.HashMap.table", "subject": top["className"],
-            "center": top["className"], "jar": "data/jars/no-such-application.jar"}
+            "center": "org.springframework.util.LinkedMultiValueMap",
+            # The jar realm-java-code ships, which this realm requires, so it is always there. It is
+            # not the dump's application: a view joining heap rows to it matches none of them.
+            "jar": "data/jars/spring-core-6.2.18.jar"}
 # Views that read the application's code have nothing to match without a jar the world holds; the
 # engine then answers FETCHED_NOT_MATCHED (heap rows fetched, none of them the application's), which
 # is the honest answer here and is the only refusal accepted, and only from these views.
