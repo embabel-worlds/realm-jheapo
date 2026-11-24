@@ -152,8 +152,7 @@
   project: { pending: pending, registered: registered, finalized: finalized, total: total,
              finalizersRegistered: finalizersRegistered, cleanupActions: cleanupActions }
 
-# ── The source of a stack frame: the jar's -sources.jar beside it, else the roots ──────────────
-# The same roots realm-java-source-code reads, under the world's data/ tree.
-
-- { name: heapSourceSpan,     kind: source-tree, from: jar, emit: spans,        roots: [data/sources, src], context: 4 }
-- { name: heapDeclarationAt,  kind: source-tree, from: jar, emit: declarations, roots: [data/sources, src] }
+# ── The source of a stack frame ─────────────────────────────────────────────────────────────────
+# Read by realm-java-source-code's own producers (javaSourceSpan, javaDeclarationAt), which this
+# realm requires: a source-tree root resolves against the world's data/ and the DECLARING realm's
+# directory, so producers declared here could never see the sources that realm ships or is given.
