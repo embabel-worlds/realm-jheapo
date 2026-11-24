@@ -5,19 +5,17 @@
 # `(f:JavaField {key: field})`, so each is fetched for that key alone.
 
 - name: HeapOverviewTotals
-  description: The analysed heap's totals - bytes, classes, instances, GC roots, duplicate-string waste.
+  description: "The heap's totals: bytes, classes, instances, GC roots, string waste. One row for the dump jheapo serves; not broken down by class (see HeapAppHistogram)."
   cypher: |
     MATCH (h:Heap {name: 'current'})-[:HAS_OVERVIEW]->(o:HeapOverview)
     RETURN o.heapBytes AS heapBytes, o.classes AS classes, o.instances AS instances, o.gcRootCount AS gcRoots,
            o.duplicateStringWaste AS duplicateStringWaste, o.pendingFinalization AS pendingFinalization
 
 - name: HeapRetainedInCode
-  description: >-
-    The classes of one package retaining the most heap, each with its compiled type in the jar and
-    its source file: where the memory is, and the code that declares it.
+  description: "One package's classes retaining the most heap, with their source files. Up to 500 of the package's classes, as jheapo ranks them; code columns are empty without `jar`."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
-    package: { type: string, description: "Dotted package, e.g. com.example.cache: filtered by jheapo." }
+    package: { type: string, required: true, description: "Dotted package, e.g. com.example.cache: filtered by jheapo." }
   cypher: |
     OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (h:Heap {name: 'current'})-[:RETAINS]->(c:HeapClass {packageName: $package})
@@ -28,13 +26,10 @@
     ORDER BY retainedBytes DESC
 
 - name: HeapHoldersInCode
-  description: >-
-    Who holds the instances of one class, by which field, and the code that writes that field: the
-    vector from an object in the heap to the code that put it there. Arrays and JDK holders are
-    shown with no field; follow them up with HELD_BY.
+  description: "Who holds one class's instances, by field, and the code that writes it. Reads a sample of 25 instances, not all. Arrays and JDK holders show no field; follow them up with HELD_BY."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
-    class: { type: string, description: "Binary class name of the objects held." }
+    class: { type: string, required: true, description: "Binary class name of the objects held." }
   cypher: |
     OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (h:Heap {name: 'current'})-[:RETAINS]->(c:HeapClass {className: $class})-[:HAS_INSTANCE]->(o:HeapObject)
@@ -47,12 +42,10 @@
     ORDER BY objects DESC, holder
 
 - name: HeapFieldGrowthCode
-  description: >-
-    For the fields holding a class's instances: each put or add made on a line that reads the
-    field, with that line as source writes it - where the holder grows.
+  description: "Where the fields holding one class's instances grow: puts and adds. Only fields holding a sample of 25 instances, and only put/add-like calls on a line that reads the field; needs `jar`."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
-    class: { type: string, description: "Binary class name of the objects held." }
+    class: { type: string, required: true, description: "Binary class name of the objects held." }
   # Same rule as HeapAppFieldGrowth: a put/add on a line that also reads the field.
   cypher: |
     OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
@@ -71,9 +64,7 @@
     ORDER BY field, line
 
 - name: HeapLeakPathInCode
-  description: >-
-    The top leak suspect's path from its GC root, step by step, each step's class with its source
-    file when the jar compiled it - where a chain leaves library code for the application's.
+  description: "Each leak suspect's path from its GC root, with source files. Covers jheapo's top 50 suspects, largest first, one chain each - not every path; inJar needs `jar`."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |

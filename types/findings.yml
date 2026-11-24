@@ -2,180 +2,189 @@
 # they were executing. See producers/findings.yml.
 
 - name: HeapWasteFinding
-  description: "One kind of waste jheapo measured: what it is (headline), how many bytes, how it can be recovered (recovery, remedy), how sure (confidence), the class it points at (vector) and whether that reaches the application's code."
+  description: "One kind of waste jheapo measured in the dump, identified by findingId (e.g. collection-capacity): what it is (headline), how many bytes, how it can be recovered (recovery, remedy), how sure (confidence), the class or field it points at (vector) and whether that reaches the application's code. Read live from jheapo's waste tab."
   properties:
-    findingId: { identity: true, description: "jheapo's id for the finding, e.g. collection-capacity." }
-    headline: "What the waste is."
-    bytes: { type: int, description: "Bytes it accounts for." }
-    recovery: "How it is recovered: tune, refactor, …"
-    recoveryMeaning: "What that recovery means."
-    confidence: "MEASURED or ESTIMATED."
-    vector: "The class the finding points at."
-    reachesCode: { type: boolean, description: "The vector is a class of the application." }
-    remedy: "What to do."
-    extent: { cardinality: LIST, description: "Every class the finding covers." }
+    findingId: { identity: true, description: "jheapo's id for the kind of waste, e.g. collection-capacity; stable across dumps, so the same finding in two dumps has one id." }
+    headline: "What the waste is, in one line as jheapo words it, e.g. the collection class and how its capacity exceeds its size."
+    bytes: { type: int, description: "Bytes of heap this waste accounts for, as jheapo measured or estimated them (see confidence)." }
+    recovery: { values: [free, tune, code, collected], description: "How the bytes come back: free (no code change), tune (a flag or sizing hint), code (the structure or algorithm must change), collected (already unreachable)." }
+    recoveryMeaning: "jheapo's one-line explanation of the recovery value, e.g. 'a flag or a sizing hint moves it'."
+    confidence: { values: [MEASURED, FLOOR, ESTIMATE], description: "MEASURED: exact bytes; FLOOR: at least this many, some bytes unmeasured; ESTIMATE: extrapolated, not counted." }
+    vector: "The class (binary name) or field (Owner.field) the waste points at, = JavaType.name or JavaField.key; empty when it points at no one class."
+    reachesCode: { type: boolean, description: "true when the vector is a class of the application rather than the JDK or a library, as jheapo judges it from the dump." }
+    remedy: "What to do about it, in jheapo's words."
+    extent: { cardinality: LIST, description: "Every class (binary name) whose instances the finding's bytes are counted over." }
   virtualJoins:
     - { anchorLabel: Heap, relationship: HAS_WASTE, keyField: name, recordKeyField: heapKey, producer: heapWasteFindings,
-        description: "Every kind of waste jheapo measured, with bytes and remedy." }
+        description: "Every kind of waste jheapo measured in the dump, with bytes and remedy: one call reads the whole waste tab, so filter in WHERE afterwards." }
 
 - name: HeapDuplicateString
-  description: "A string value held in many copies: how many, the bytes wasted, and the value (sample)."
+  description: "One string value held in many copies in the dump, identified by id (`<wasted>:<count>:<value>`): how many copies, the bytes the extra copies waste, and the value itself (sample). Read live from jheapo's strings tab."
   properties:
-    id: { identity: true, description: "Wasted bytes, count and value." }
-    count: { type: int, description: "Copies." }
-    wasted: { type: int, description: "Bytes the extra copies waste." }
-    sample: "The value."
+    id: { identity: true, description: "Wasted bytes, copy count and the value, joined as `<wasted>:<count>:<value>`; unique per value in one dump." }
+    count: { type: int, description: "How many String objects in the dump hold this same value." }
+    wasted: { type: int, description: "Bytes the copies beyond the first waste, in bytes; what interning the value would save." }
+    sample: "The string value itself, as held in the dump."
   virtualJoins:
     - { anchorLabel: Heap, relationship: DUPLICATE_STRING, keyField: name, recordKeyField: heapKey, producer: heapDuplicateStrings,
-        description: "The most wasteful duplicated string values." }
+        description: "The most wasteful duplicated string values in the dump, as jheapo ranks them: one call for all of them. For who holds them, traverse STRINGS_HELD_BY instead." }
 
 - name: HeapStringHolder
-  description: "Where duplicated strings are held: a class or field (name) holding many strings, with how many distinct values among them - few distinct values in many objects is an interning or caching opportunity."
+  description: "One class or field holding many of the dump's strings, identified by name (a class, or Owner.field), with how many distinct values among them: few distinct values in many objects is an interning or caching opportunity. Read live from jheapo's strings tab."
   properties:
-    name: { identity: true, description: "The holding class, or field as Owner.field." }
-    rank: { type: int, description: "Rank by memory." }
-    objects: { type: int, description: "Strings held." }
-    memoryBytes: { type: int, description: "Bytes those strings take." }
-    overheadBytes: { type: int, description: "Bytes of that which duplication wastes." }
-    distinctValues: { type: int, description: "Distinct values among them." }
+    name: { identity: true, description: "The holding class (binary name) or field as Owner.field, = JavaType.name or JavaField.key." }
+    rank: { type: int, description: "Its position when holders are ranked by the memory their strings take, 1 first." }
+    objects: { type: int, description: "How many String objects this holder holds." }
+    memoryBytes: { type: int, description: "Bytes those strings take, in bytes." }
+    overheadBytes: { type: int, description: "Of memoryBytes, the bytes duplication wastes: what keeping one copy of each value would save." }
+    distinctValues: { type: int, description: "How many different values those strings hold." }
   virtualJoins:
     - { anchorLabel: Heap, relationship: STRINGS_HELD_BY, keyField: name, recordKeyField: heapKey, producer: heapStringHolders,
-        description: "Who holds the strings, ranked by memory." }
+        description: "Who holds the dump's strings, ranked by memory: one call for the list. For the duplicated values themselves, traverse DUPLICATE_STRING instead." }
 
 - name: HeapIdleCollection
-  description: "Collections allocated but empty, or holding one element: shape is `empty` or `singleton`; count of them and the bytes they take."
+  description: "One collection class whose instances are empty, or hold one element, identified by id (`<shape>:<classId>`): shape is `empty` or `singleton`, with how many there are and the bytes they take. Read live from jheapo's collections tab."
   properties:
-    id: { identity: true, description: "Shape and class id." }
-    classId: "The collection class's id."
-    className: "The collection class."
-    shape: "`empty` or `singleton`."
-    count: { type: int, description: "How many there are." }
-    shallowBytes: { type: int, description: "Bytes they take." }
+    id: { identity: true, description: "Shape and class id joined, `empty:<classId>` or `singleton:<classId>`." }
+    classId: "jheapo's id for the collection class; what HeapClass.classId holds for the same class."
+    className: "The collection class, binary name, e.g. java.util.HashMap."
+    shape: { values: [empty, singleton], description: "empty: no elements; singleton: exactly one element." }
+    count: { type: int, description: "How many instances of this class have this shape." }
+    shallowBytes: { type: int, description: "Shallow bytes those instances take, in bytes." }
   virtualJoins:
     - { anchorLabel: Heap, relationship: EMPTY_COLLECTION, keyField: name, recordKeyField: heapKey, producer: heapEmptyCollections,
-        description: "Empty collections, by class." }
+        description: "Collection classes whose instances are empty, one row per class: one call. Single-element ones are SINGLETON_COLLECTION." }
     - { anchorLabel: Heap, relationship: SINGLETON_COLLECTION, keyField: name, recordKeyField: heapKey, producer: heapSingletonCollections,
-        description: "Single-element collections, by class." }
+        description: "Collection classes whose instances hold one element, one row per class: one call. Empty ones are EMPTY_COLLECTION." }
 
 - name: HeapNestedCollection
-  description: "A collection of collections held by a field: the holder class and field (fieldKey = JavaField.key), whether static, the outer and inner collection classes and how many inner ones. Nested collections held statically are a classic unbounded growth."
+  description: "One collection of collections held by a field, identified by id (field and the two classes): the holder class and field (fieldKey = JavaField.key), whether static, the outer and inner collection classes and how many inner ones. Nested collections held statically are a classic unbounded growth."
   properties:
-    id: { identity: true, description: "Field and the two classes." }
-    holderClass: "The class whose field holds the outer collection."
-    field: "The field's name."
+    id: { identity: true, description: "`<holderClass>.<field>:<collectionClass>><storedClass>`." }
+    holderClass: "The class (binary name) whose field holds the outer collection."
+    field: "The field's simple name, without its class; fieldKey has it as Owner.field."
     fieldKey: "Owner.field. Equals JavaField.key."
-    inStatic: { type: boolean, description: "Held from a static field." }
-    collectionClass: "The outer collection."
-    storedClass: "The collections stored in it."
-    references: { type: int, description: "How many inner collections." }
+    inStatic: { type: boolean, description: "true when the outer collection is held from a static field, so it lives as long as its class loader." }
+    collectionClass: "The outer collection's class, binary name."
+    storedClass: "The class of the collections stored in the outer one, binary name."
+    references: { type: int, description: "How many inner collections the outer ones hold." }
   virtualJoins:
     - { anchorLabel: Heap, relationship: NESTED_COLLECTION, keyField: name, recordKeyField: heapKey, producer: heapNestedCollections,
-        description: "Collections of collections and the fields that hold them." }
+        description: "Collections of collections in the dump and the fields that hold them: one call for all of them. Join fieldKey to JavaField.key for the declaration." }
 
 - name: HeapThread
-  description: "A thread in the dump: name, state, daemon, how deep its stack. Its frames: HAS_FRAME."
+  description: "One thread in the dump, identified by oid (its Thread object's id): name, state, daemon, priority, how deep its stack is and how many objects its frames hold. Its frames: HAS_FRAME. Read live from jheapo's threads tab."
   properties:
-    oid: { identity: true, description: "The thread object's id." }
-    name: "Thread name."
-    daemon: { type: boolean, description: "A daemon thread." }
-    priority: { type: int, description: "Priority." }
-    state: "RUNNABLE, BLOCKED, WAITING, TIMED_WAITING, …"
-    tid: { type: int, description: "Thread id." }
-    frameCount: { type: int, description: "Frames on its stack." }
-    localCount: { type: int, description: "Objects its frames hold locally." }
-    shallowSize: { type: int, description: "Shallow bytes of the thread object." }
+    oid: { identity: true, description: "The thread object's id, decimal; what HeapObject.oid holds for the same object." }
+    name: "The thread's name as the application set it, e.g. main or http-nio-8080-exec-1."
+    daemon: { type: boolean, description: "true for a daemon thread, which does not keep the JVM alive." }
+    priority: { type: int, description: "Java thread priority, 1 (lowest) to 10 (highest), 5 normal; -1 when the dump does not say." }
+    state: "Thread.State at the dump: 'NEW', 'RUNNABLE', 'BLOCKED', 'WAITING', 'TIMED_WAITING' or 'TERMINATED'; empty when the dump carries no thread status."
+    tid: { type: int, description: "The JVM's thread id (Thread.getId); -1 when the dump carries none." }
+    frameCount: { type: int, description: "Frames on its stack at the dump." }
+    localCount: { type: int, description: "Objects its frames hold as local variables, summed over its frames." }
+    shallowSize: { type: int, description: "Shallow bytes of the thread object itself, in bytes; -1 when not read." }
   virtualJoins:
     - { anchorLabel: Heap, relationship: HAS_THREAD, keyField: name, recordKeyField: heapKey, producer: heapThreads,
-        description: "Every thread in the dump." }
+        description: "Every thread in the dump, one call for all of them; filter on state in WHERE. Then HAS_FRAME for a thread's stack, batched." }
 
 - name: HeapStackFrame
-  description: "One frame of a thread's stack, innermost first (frame 0): the class, method, file and line it was executing. Its source, given the application's jar: pin `(l:SourceLine {key: $jar + '!' + f.sourcePath + '#' + toString(f.line) + '#' + f.method})`, then SOURCE_AT for the lines, DECLARED_AT for the whole method."
+  description: "One frame of a thread's stack, identified by id (thread oid and frame number), innermost first (frame 0): the class, method, file and line it was executing. Its source, given the application's jar: pin `(l:SourceLine {key: $jar + '!' + f.sourcePath + '#' + toString(f.line) + '#' + f.method})`, then SOURCE_AT for the lines, DECLARED_AT for the whole method."
   properties:
-    id: { identity: true, description: "Thread oid and frame number." }
-    frame: { type: int, description: "Position, 0 innermost." }
-    label: "The frame as the dump writes it."
-    className: "The class."
-    packageName: "Its package."
-    method: "The method."
-    file: "The source file the frame names."
+    id: { identity: true, description: "`<thread oid>#<frame>`." }
+    frame: { type: int, description: "Position on the stack, 0 innermost (the frame executing)." }
+    label: "The frame as the dump writes it, e.g. com.x.Cache.put(Cache.java:42)."
+    className: "The frame's class, binary name read from the label; = JavaType.name. Empty when the label names none."
+    packageName: "The frame's class's package, e.g. com.x; = JavaPackage.name. Filters pass to jheapo."
+    method: "The method's simple name read from the label, e.g. put; `<init>` for a constructor."
+    file: "The source file the frame names, e.g. Cache.java; empty for a native frame or one with no file."
     line: { type: int, description: "The line; -1 when the dump does not say (native, unknown)." }
-    sourcePath: "Where the file sits in a source root."
-    locals: { type: int, description: "Objects this frame holds." }
-    threadName: "The thread's name."
-    threadState: "The thread's state."
+    sourcePath: "Where the file sits in a source root: the package as a path, then the file, e.g. com/x/Cache.java; empty with no file."
+    locals: { type: int, description: "Objects this frame holds as local variables." }
+    threadName: "Name of the thread whose stack this is, as HeapThread.name."
+    threadState: "That thread's Thread.State: 'NEW', 'RUNNABLE', 'BLOCKED', 'WAITING', 'TIMED_WAITING', 'TERMINATED', or empty."
     forKey: "The thread's oid."
   virtualJoins:
     - { anchorLabel: HeapThread, relationship: HAS_FRAME, keyField: oid, recordKeyField: forKey, producer: threadFrames, maxFanoutTotal: 50000,
-        description: "A thread's stack. Batched across threads; narrow with `{packageName: '…'}` to the application's frames." }
+        description: "A thread's stack, innermost first. Batched: 100 threads per jheapo call. Narrow with `{packageName: '…'}` or `{className: '…'}` to the application's frames: jheapo filters before it answers." }
 
 - name: HeapClassLoaderGroup
-  description: "Class loaders by type and state: how many, how many define classes, how many are unreachable - an unreachable loader still defining classes is the classic redeploy leak."
+  description: "One group of class loaders sharing a loader class and a state, identified by id (`<type>:<state>`): how many, how many define classes, how many are unreachable - an unreachable loader still defining classes is the classic redeploy leak. Read live from jheapo's classloaderDetail tab."
   properties:
-    id: { identity: true, description: "Type and state." }
-    type: "The loader class."
-    state: "Its state."
-    instances: { type: int, description: "Loaders of this type and state." }
-    withClasses: { type: int, description: "Of them, how many define classes." }
-    classesDefined: { type: int, description: "Classes they define." }
-    unreachable: { type: int, description: "Unreachable loaders." }
-    classesPerLoader: { type: int, description: "Classes per loader." }
+    id: { identity: true, description: "`<type>:<state>`." }
+    type: "The loader's class, binary name, e.g. 'jdk.internal.loader.ClassLoaders$AppClassLoader' or 'org.apache.catalina.loader.ParallelWebappClassLoader': any loader class, not a closed list."
+    state: { values: [LEAK_SUSPECT, DISCONNECTED, EMPTY, NORMAL], description: "LEAK_SUSPECT: several live loaders of the type each define classes; DISCONNECTED: unreachable; EMPTY: reachable, defines none; NORMAL: one live, defines classes." }
+    instances: { type: int, description: "How many loader objects of this type are in this state." }
+    withClasses: { type: int, description: "Of them, how many define at least one class." }
+    classesDefined: { type: int, description: "Classes those loaders define, in all." }
+    unreachable: { type: int, description: "Of them, how many are unreachable from any GC root (0 until reachability is known)." }
+    classesPerLoader: { type: int, description: "classesDefined divided by withClasses, rounded down; 0 when no loader of the group defines a class." }
   virtualJoins:
     - { anchorLabel: Heap, relationship: HAS_CLASS_LOADERS, keyField: name, recordKeyField: heapKey, producer: heapClassLoaderGroups,
-        description: "Class loaders, grouped." }
+        description: "The dump's class loaders grouped by loader class and state, leak suspects first: one call for every group." }
 
 - name: HeapHumongousArray
-  description: "Arrays large enough to be G1 humongous objects, by owning class: their bytes, the region footprint they take, and the bytes that footprint wastes."
+  description: "One group of arrays large enough to be G1 humongous objects, identified by id (owner and array class): their bytes, the G1 region footprint they take, and the bytes that footprint wastes. Read live from jheapo's humongous tab."
   properties:
-    id: { identity: true, description: "Owner and array class." }
-    ownerClassName: "The class holding the arrays."
-    arrayClassName: "The array class."
-    instances: { type: int, description: "Arrays." }
-    regionSize: { type: int, description: "The G1 region size." }
-    totalTrueBytes: { type: int, description: "Bytes the arrays need." }
-    totalFootprintBytes: { type: int, description: "Bytes the regions they occupy take." }
-    totalWastedBytes: { type: int, description: "The difference." }
-    sampleArrayOid: "One of the arrays."
+    id: { identity: true, description: "`<ownerClassName>:<arrayClassName>`." }
+    ownerClassName: "The class holding the arrays, binary name; prefixed `static ` when held from a static field."
+    arrayClassName: "The arrays' own class as T[], e.g. byte[] or java.lang.Object[] - a class name, not a measure, so no unit."
+    instances: { type: int, description: "How many humongous arrays this owner holds." }
+    regionSize: { type: int, description: "The G1 region size the dump implies, in bytes." }
+    totalTrueBytes: { type: int, description: "Bytes the arrays actually need, in bytes." }
+    totalFootprintBytes: { type: int, description: "Bytes of the whole G1 regions the arrays occupy, in bytes." }
+    totalWastedBytes: { type: int, description: "totalFootprintBytes minus totalTrueBytes, in bytes: the region tails left empty." }
+    sampleArrayOid: "The oid of one of the arrays (an id, not a measure, no unit); walk it with HeapObject {oid}."
   virtualJoins:
     - { anchorLabel: Heap, relationship: HUMONGOUS, keyField: name, recordKeyField: heapKey, producer: heapHumongousArrays,
-        description: "Humongous arrays and what they waste." }
+        description: "Humongous arrays in the dump grouped by the class holding them, with what their regions waste: one call for all of them." }
 
 - name: HeapEntanglement
-  description: "Classes whose instances are entangled - reachable only through each other - with the bytes held that way: what one fix would release together."
+  description: "One class whose instances are entangled - reachable only through each other - identified by name (its binary class name), with the bytes held that way: what one fix would release together. Read live from jheapo's entanglement tab."
   properties:
-    name: { identity: true, description: "The class." }
-    classId: { type: int, description: "Its id." }
-    instances: { type: int, description: "Instances." }
-    entangled: { type: int, description: "Entangled instances." }
-    entPct: { type: float, description: "Share entangled, percent." }
-    shallow: { type: int, description: "Shallow bytes." }
-    entangledBytes: { type: int, description: "Bytes held through the entanglement." }
+    name: { identity: true, description: "The class, binary name; = JavaType.name." }
+    classId: { type: int, description: "jheapo's id for the class, as HeapClass.classId holds it (there as a string)." }
+    instances: { type: int, description: "How many instances of the class the dump holds in all." }
+    entangled: { type: int, description: "Of those instances, how many are reachable only through other instances of the group." }
+    entPct: { type: float, description: "entangled as a share of instances, in percent (0 to 100), one decimal." }
+    shallow: { type: int, description: "Shallow bytes of the class's instances, in bytes." }
+    entangledBytes: { type: int, description: "Bytes held only through the entanglement, in bytes: what breaking it would release." }
   virtualJoins:
     - { anchorLabel: Heap, relationship: ENTANGLED, keyField: name, recordKeyField: heapKey, producer: heapEntanglement,
-        description: "The most entangled classes." }
+        description: "The classes whose instances keep each other alive, as jheapo ranks them: one call for the list." }
 
 - name: HeapFinalization
-  description: "Finalization: objects pending, registered and finalized, finalizers and cleaners registered. A pending backlog means the finalizer thread is behind."
+  description: "One node per analysed dump, identified by heapKey (the Heap anchor's name): its finalization counts - objects pending, registered and finalized, finalizers and cleaners registered. A pending backlog means the finalizer thread is behind. Read live from jheapo's finalization tab."
   properties:
     heapKey: { identity: true, description: "The Heap anchor's name." }
-    pending: { type: int, description: "Awaiting finalization." }
-    registered: { type: int, description: "Registered for finalization." }
-    finalized: { type: int, description: "Finalized." }
-    total: { type: int, description: "All finalizable." }
-    finalizersRegistered: { type: int, description: "Finalizers registered." }
-    cleanupActions: { type: int, description: "Cleaner actions." }
+    pending: { type: int, description: "Objects on the finalization queue, unreachable and waiting for the finalizer thread." }
+    registered: { type: int, description: "Objects registered for finalization and still reachable." }
+    finalized: { type: int, description: "Objects whose finalizer has run, waiting to be collected." }
+    total: { type: int, description: "pending + registered + finalized: every finalizable object, counted in objects (units), not bytes." }
+    finalizersRegistered: { type: int, description: "java.lang.ref.Finalizer instances in the dump: one per object with a finalize() method still tracked." }
+    cleanupActions: { type: int, description: "Cleaner actions registered (java.lang.ref.Cleaner), the finalizer's replacement." }
   virtualJoins:
     - { anchorLabel: Heap, relationship: HAS_FINALIZATION, keyField: name, recordKeyField: heapKey, producer: heapFinalization,
-        description: "The finalization summary." }
+        description: "The dump's one finalization summary row: a single call. Totals only; which classes are pending is not read here." }
 
 # A line of the application's source, pinned by key - `<jar>!<sourcePath>#<line>#<method>`, the
 # spanKey realm-java-code gives a member - so a stack frame reaches the line it was executing in
 # whichever jar the view is given. Nothing else declares SourceLine: it is only an anchor.
+#
+# SourceSpan and JavaDeclaration belong to realm-code-model and realm-java-source-code; they are
+# restated here, description and identity as their owners give them, so this realm loads without them.
 - name: SourceSpan
+  description: "A window of numbered source lines around one line - the code at a method, a call or a field access - identified by id. `matches` is false when the name the compiled code expects is not on those lines: the source is not the artifact's version."
+  properties:
+    id: { identity: true, description: "The file's id, `#`, the line range." }
   virtualJoins:
     - { anchorLabel: SourceLine, relationship: SOURCE_AT, keyField: key, recordKeyField: anchorKey, producer: heapSourceSpan,
-        description: "The source lines around one line of the application's code." }
+        description: "The source lines around one line of the application's code, 4 lines either side, read from the jar's -sources.jar or the source roots: one read per pinned line." }
 
 - name: JavaDeclaration
+  description: "A declaration in a Java file's syntax tree, identified by id - class, interface, enum, record, annotation, field, constructor, method or initializer - with its exact extent, signature, modifiers, annotations, Javadoc and (for members) full numbered text."
+  properties:
+    id: { identity: true, description: "`<root>!<path>#<kind>:<name>@<fromLine>`." }
   virtualJoins:
     - { anchorLabel: SourceLine, relationship: DECLARED_AT, keyField: key, recordKeyField: anchorKey, producer: heapDeclarationAt,
-        description: "The whole declaration - the method - that line is in." }
+        description: "The whole declaration - the method - that one line is in, from the source roots: use it when the window SOURCE_AT gives is too narrow to read the method." }

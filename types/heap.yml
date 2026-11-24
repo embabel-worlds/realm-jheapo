@@ -21,21 +21,21 @@
 #   OPTIONAL MATCH (j:Jar {path: $jar})-[:HAS_FIELD]->(f:JavaField {key: hd.field})
 
 - name: HeapOverview
-  description: "The analysed heap's totals: bytes, classes, instances, GC roots, duplicate-string waste."
+  description: "One node per analysed heap dump, identified by heapKey (the Heap anchor's name; jheapo serves one dump, so 'current'): its totals - bytes, classes, instances, class loaders, GC roots, duplicate-string waste. Read live from jheapo's overview tab; a figure the analysis has not reached yet is absent."
   properties:
     heapKey: { identity: true, description: "The Heap anchor's name." }
-    heapBytes: { type: int, description: "Heap bytes in the dump." }
-    classes: { type: int, description: "Classes loaded." }
-    instances: { type: int, description: "Objects in the dump." }
-    classLoaders: { type: int, description: "Class loaders." }
-    gcRootCount: { type: int, description: "GC roots." }
-    duplicateStringWaste: { type: int, description: "Bytes held by duplicate strings." }
-    duplicateStringGroups: { type: int, description: "Groups of duplicate strings." }
+    heapBytes: { type: int, description: "Shallow bytes of every object in the dump, in bytes: the heap's used size when it was dumped." }
+    classes: { type: int, description: "Classes the dump records as loaded, by any loader." }
+    instances: { type: int, description: "Objects in the dump, of every class." }
+    classLoaders: { type: int, description: "Class loader objects in the dump; HAS_CLASS_LOADERS groups them by loader class and state." }
+    gcRootCount: { type: int, description: "GC root records in the dump (thread stacks, statics, JNI handles, ...); one object can be rooted by several records." }
+    duplicateStringWaste: { type: int, description: "Bytes the extra copies of duplicated string values take, in bytes; DUPLICATE_STRING lists them." }
+    duplicateStringGroups: { type: int, description: "How many distinct string values are held in more than one copy." }
     pendingFinalization: { type: int, description: "Objects waiting for finalization." }
     dumpTimestamp: { type: int, description: "When the dump was taken, epoch milliseconds." }
   virtualJoins:
     - { anchorLabel: Heap, relationship: HAS_OVERVIEW, keyField: name, recordKeyField: heapKey, producer: heapOverview,
-        description: "The heap's totals." }
+        description: "The dump's one totals row: a single jheapo call, the cheapest way to size the heap before any walk." }
 
 - name: HeapClass
   description: "A class in the heap, by its runtime binary name (= JavaType.name). Reached from the heap by what it retains (RETAINS, with retainedBytes) or from the histogram's top classes (HAS_CLASS, with instances and shallowBytes). Its objects: HAS_INSTANCE."
@@ -48,9 +48,21 @@
     shallowBytes: { type: int, description: "Shallow bytes of its instances (histogram rows)." }
   virtualJoins:
     - { anchorLabel: Heap, relationship: RETAINS, keyField: name, recordKeyField: heapKey, producer: heapRetainedClasses,
-        description: "The classes retaining the most, with retainedBytes. Narrow with `{packageName: '…'}` or `{className: '…'}` in the MATCH: the filter is applied by jheapo." }
+        description: "The top 500 classes by retained bytes, with retainedBytes: one call. Narrow with `{packageName: '…'}` or `{className: '…'}` in the MATCH: the filter is applied by jheapo." }
     - { anchorLabel: Heap, relationship: HAS_CLASS, keyField: name, recordKeyField: heapKey, producer: heapHistogramClasses,
-        description: "The histogram's top classes by shallow bytes (the top 30), with instance counts." }
+        description: "The histogram's top classes by shallow bytes (the top 30, no more), with instance counts: one call. For what a class retains, traverse RETAINS instead." }
+  examples:
+    - q: "Which classes of com.example.cache retain the most heap?"
+      cypher: |
+        MATCH (h:Heap {name: 'current'})-[:RETAINS]->(c:HeapClass {packageName: 'com.example.cache'})
+        RETURN c.className AS class, c.instances AS instances, c.retainedBytes AS retainedBytes
+        ORDER BY retainedBytes DESC LIMIT 10
+    - q: "Who holds the instances of com.example.Order, and by which field?"
+      cypher: |
+        MATCH (h:Heap {name: 'current'})-[:RETAINS]->(c:HeapClass {className: 'com.example.Order'})-[:HAS_INSTANCE]->(o:HeapObject)
+              -[:HELD_BY]->(hd:HeapHolder)
+        RETURN hd.className AS holder, hd.field AS field, count(DISTINCT o) AS objectsInSample
+        ORDER BY objectsInSample DESC
 
 - name: HeapObject
   description: "An object in the heap, by oid. Who holds it: HELD_BY. What its fields hold: HAS_FIELD. Its path from a GC root: PATH_TO_ROOT."
@@ -65,11 +77,19 @@
     forKey: "The class id (or heap) the object was listed for."
   virtualJoins:
     - { anchorLabel: HeapClass, relationship: HAS_INSTANCE, keyField: classId, recordKeyField: forKey, producer: classInstances,
-        description: "Up to 25 of a class's instances. Batched across classes." }
+        description: "Up to 25 of a class's instances, a sample and not all of them: batched 100 classes per call. Narrow with `{packageName: …}`: jheapo filters." }
     - { anchorLabel: Heap, relationship: LEAK_SUSPECT, keyField: name, recordKeyField: heapKey, producer: heapLeakSuspects,
-        description: "The objects retaining the most, with retainedSize." }
+        description: "The top 50 objects by retained bytes, as jheapo's leak suspects, with retainedSize: one call. Narrow with `{className: …}` or `{packageName: …}`: jheapo filters." }
     - { anchorLabel: Heap, relationship: DOMINATES, keyField: name, recordKeyField: heapKey, producer: heapDominators,
-        description: "The top of the dominator tree, largest retained first." }
+        description: "The top 100 children of the dominator tree's root, largest retained first: one call. Narrow with `{className: …}` or `{packageName: …}`: jheapo filters." }
+  examples:
+    - q: "What is the biggest leak suspect's path from its GC root?"
+      cypher: |
+        MATCH (h:Heap {name: 'current'})-[:LEAK_SUSPECT]->(o:HeapObject)
+        WITH o ORDER BY o.retainedSize DESC LIMIT 1
+        MATCH (o)-[:PATH_TO_ROOT]->(p:HeapPathStep)
+        RETURN o.className AS suspect, p.step AS step, p.className AS class
+        ORDER BY step
 
 - name: HeapHolder
   description: "One holder of an object: the holding object (`oid`, `className`) and the field (`field`, as `Owner.field`, = JavaField.key) or array slots (`through`) it holds it by. Walk further up with HELD_BY."
@@ -85,11 +105,11 @@
     forKey: "The oid of the object held."
   virtualJoins:
     - { anchorLabel: HeapObject, relationship: HELD_BY, keyField: oid, recordKeyField: forKey, producer: objectHolders,
-        description: "Who holds an object, and by which field. Batched; narrow with `{packageName: '…'}` to see only your own classes." }
+        description: "Who holds an object, and by which field, one row per holder. Batched 100 objects per call; narrow with `{packageName: '…'}` to see only your own classes." }
     - { anchorLabel: HeapHolder, relationship: HELD_BY, keyField: oid, recordKeyField: forKey, producer: objectHolders,
-        description: "Who holds a holder: the next step up." }
+        description: "Who holds a holder: the next step up towards a GC root, batched 100 oids per call; repeat the hop to climb further." }
     - { anchorLabel: HeapFieldValue, relationship: HELD_BY, keyField: oid, recordKeyField: forKey, producer: objectHolders,
-        description: "Who holds a field's value." }
+        description: "Who holds a field's value - every holder of that object, not only the field it was reached through; batched 100 oids per call." }
 
 - name: HeapFieldValue
   description: "What one field of an object holds: the held object (`oid`, `className`) and the field (`heldBy`, `Owner.field` = JavaField.key). Walk further down with HAS_FIELD."
@@ -98,7 +118,7 @@
     oid: "The held object's oid."
     className: "The held object's class."
     typeName: "The class as a binary name, = JavaType.name: `className` without the `class ` (and ` [Sticky Class]`) jheapo writes for a Class object."
-    packageName: "Its package."
+    packageName: "Package of the held object's class, e.g. com.example.cache; = JavaPackage.name. Filters pass to jheapo."
     heldBy: "The field as jheapo writes it, `Owner.field` (a static one prefixed `static `); filters pass to jheapo as written."
     fieldKey: "`heldBy` without jheapo's `static ` prefix. Equals JavaField.key."
     forKey: "The owner's oid."
@@ -106,22 +126,22 @@
     - { anchorLabel: HeapObject, relationship: HAS_FIELD, keyField: oid, recordKeyField: forKey, producer: objectFields,
         description: "What an object's fields hold. Narrow with `{heldBy: 'Owner.field'}`: jheapo filters." }
     - { anchorLabel: HeapHolder, relationship: HAS_FIELD, keyField: oid, recordKeyField: forKey, producer: objectFields,
-        description: "What a holder's fields hold." }
+        description: "What a holder's fields hold, one row per field value, batched 100 holders per call. Narrow with `{heldBy: 'Owner.field'}`: jheapo filters." }
     - { anchorLabel: HeapFieldValue, relationship: HAS_FIELD, keyField: oid, recordKeyField: forKey, producer: objectFields,
-        description: "One level further down." }
+        description: "What a field value's own fields hold: one level further down the object graph, batched 100 objects per call; each further level is one more round of calls." }
 
 - name: HeapPathStep
-  description: "One step of an object's path from a GC root, `step` 0 at the root and the object itself last. ORDER BY step."
+  description: "One step of an object's path from its nearest GC root, identified by id (`<object oid>#<step>`): `step` 0 at the root and the object itself last. ORDER BY step."
   properties:
     id: { identity: true, description: "`<object oid>#<step>`." }
     step: { type: int, description: "Position from the root, 0 first." }
     oid: "This step's object."
     className: "Its class. Equals JavaType.name."
     typeName: "The class as a binary name, = JavaType.name: `className` without the `class ` (and ` [Sticky Class]`) jheapo writes for a Class object."
-    packageName: "Its package."
+    packageName: "Package of this step's class, e.g. com.example.cache; = JavaPackage.name."
     forKey: "The oid of the object whose path this is."
   virtualJoins:
     - { anchorLabel: HeapObject, relationship: PATH_TO_ROOT, keyField: oid, recordKeyField: forKey, producer: objectPaths,
-        description: "The object's path from its nearest GC root." }
+        description: "The object's path from its nearest GC root, one row per step: batched 100 objects per call. Only the first chain jheapo finds, not every path." }
     - { anchorLabel: HeapHolder, relationship: PATH_TO_ROOT, keyField: oid, recordKeyField: forKey, producer: objectPaths,
-        description: "A holder's path from its nearest GC root." }
+        description: "A holder's path from its nearest GC root, one row per step, batched 100 per call; only the first chain found." }

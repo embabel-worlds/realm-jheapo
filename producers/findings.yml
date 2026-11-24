@@ -8,6 +8,7 @@
 
 - name: heapWasteFindings
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: getTab
   keyArgs: [heap]
   args: { tab: waste }
@@ -19,6 +20,7 @@
 
 - name: heapDuplicateStrings
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: getTab
   keyArgs: [heap]
   args: { tab: strings }
@@ -30,6 +32,7 @@
 
 - name: heapStringHolders
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: getTab
   keyArgs: [heap]
   args: { tab: strings }
@@ -39,6 +42,7 @@
 
 - name: heapEmptyCollections
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: getTab
   keyArgs: [heap]
   args: { tab: collections }
@@ -51,6 +55,7 @@
 
 - name: heapSingletonCollections
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: getTab
   keyArgs: [heap]
   args: { tab: collections }
@@ -63,6 +68,7 @@
 
 - name: heapNestedCollections
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: getTab
   keyArgs: [heap]
   args: { tab: collectionsOfCollections }
@@ -75,6 +81,7 @@
 
 - name: heapThreads
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: getTab
   keyArgs: [heap]
   args: { tab: threads }
@@ -86,6 +93,7 @@
 
 - name: threadFrames
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: batchFrames
   keyArg: oids
   maxKeysPerCall: 100
@@ -100,6 +108,7 @@
 
 - name: heapClassLoaderGroups
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: getTab
   keyArgs: [heap]
   args: { tab: classloaderDetail }
@@ -111,6 +120,7 @@
 
 - name: heapHumongousArrays
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: getTab
   keyArgs: [heap]
   args: { tab: humongous }
@@ -122,6 +132,7 @@
 
 - name: heapEntanglement
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: getTab
   keyArgs: [heap]
   args: { tab: entanglement }
@@ -131,6 +142,7 @@
 
 - name: heapFinalization
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: getTab
   keyArgs: [heap]
   args: { tab: finalization }
