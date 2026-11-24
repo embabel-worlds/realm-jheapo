@@ -84,6 +84,8 @@ for f in sorted(glob.glob("views/*.yml")):
         if name in needs_jar and isinstance(problem, dict) and problem.get("reason") == "FETCHED_NOT_MATCHED":
             problem = None
         check("%s answers" % name, None, problem)
+        if problem:
+            print("       %s" % json.dumps({k: v for k, v in env.items() if k != "data"})[:1500])
 
 print("== L2: the views reconcile with jheapo ==")
 o = rows(V["HeapOverviewTotals"])
