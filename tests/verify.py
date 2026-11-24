@@ -87,6 +87,28 @@ for f in sorted(glob.glob("views/*.yml")):
         if problem:
             print("       %s" % json.dumps({k: v for k, v in env.items() if k != "data"})[:1500])
 
+def kg(cypher, params):
+    req = urllib.request.Request("%s/api/v1/admin/kg/execute" % APPLIANCE, data=json.dumps({"cypher": cypher, "params": params}).encode(),
+                                 headers=HEADERS, method="POST")
+    try:
+        return json.load(urllib.request.urlopen(req, timeout=600))
+    except urllib.error.HTTPError as e:
+        return {"error": "%s %s" % (e.code, e.read().decode(errors="replace")[:300])}
+
+
+if (V["HeapCenterLifecycle"].get("error")):
+    # Which branch of the lifecycle a source failed in: each run on its own.
+    P = {"jar": required["jar"], "center": required["center"], "carrier": ""}
+    for label, q in [
+        ("born", "MATCH (j:Jar {path: $jar})-[:HAS_CALL]->(b:JavaMethodCall {calleeOwner: $center, calleeName: '<init>'}) RETURN count(b) AS n"),
+        ("construction", "MATCH (j:Jar {path: $jar})-[:HAS_METHOD]->(m:JavaMethod {owner: $center, name: '<init>'})-[:MAKES_CALL]->(k:JavaMethodCall {internal: true}) RETURN count(k) AS n"),
+        ("calls", "MATCH (j:Jar {path: $jar})-[:HAS_CALL]->(e:JavaMethodCall) WHERE e.calleeName IN ['put','remove','clear'] RETURN count(e) AS n"),
+        ("sites", "MATCH (j:Jar {path: $jar})-[:HAS_CALL]->(e:JavaMethodCall) WHERE e.calleeName IN ['put','remove','clear'] OPTIONAL MATCH (e)-[:AT_SITE]->(cs:JavaCallSite) RETURN count(e) AS n, count(cs) AS sites"),
+        ("carrier", "MATCH (j:Jar {path: $jar})-[:HAS_FIELD]->(gf:JavaField {key: $carrier}) RETURN count(gf) AS n"),
+    ]:
+        r = kg(q, P)
+        print("       diag %s: %s" % (label, json.dumps({k: r.get(k) for k in ("rows", "error", "warnings", "outcome") if k in r})[:600]))
+
 print("== L2: the views reconcile with jheapo ==")
 o = rows(V["HeapOverviewTotals"])
 check("overview: one row", 1, len(o))
