@@ -10,7 +10,7 @@
 # lifecycle from the jar. The heap-leaks lens runs the second for each center the first finds.
 
 - name: HeapLeakShape
-  description: "Each leak's shape: the center (a retaining class, the application's own when a jar is given), its instances and retained bytes, the carrier that holds it - the owner, the field, and the chain of collections between them - and the drag, what the center's fields hold."
+  description: "Each leak's shape: its center, carrier and drag, largest first. The center is a retaining class (the application's own when a jar is given) with its instances and retained bytes; the carrier is the owner, field and chain of collections holding it; the drag is what the center's fields hold. Reads `samples` instances per center, not all; a center held by two carriers shows as two rows."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: every retained class outside the JDK is a candidate center." }
     samples: { type: int, default: 3, description: "Instances of each center whose path to a GC root is read. A center held by two carriers shows as two rows." }
@@ -48,10 +48,10 @@
     ORDER BY retainedBytes DESC, samplesInThisCarrier DESC
 
 - name: HeapCenterLifecycle
-  description: "One center's lifecycle, as the application's jar writes it, stage by stage with source: born (every `new` of it), construction (what its constructors call), enrolled (each put or add given one, and each put or add on the carrier field), released (each remove, clear or poll - takesCenter when it is given one - and each reassignment of the carrier field). An empty released stage is a lifecycle with no end."
+  description: "One leak center's lifecycle in the jar: born, enrolled, released. Stage by stage with source: born (every `new` of it), construction (what its constructors call), enrolled (each put or add given one, and each on the carrier field), released (each remove, clear or poll, and each reassignment of the carrier field). An empty released stage is a lifecycle with no end. Reads the jar only, not the heap; calls through a local alias are not seen."
   params:
-    jar: { type: string, description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/." }
-    center: { type: string, description: "The center's binary class name, e.g. com.example.Order." }
+    jar: { type: string, required: true, description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/." }
+    center: { type: string, required: true, description: "The center's binary class name, e.g. com.example.Order." }
     carrier: { type: string, default: "", description: "The carrier field as Owner.field, from HeapLeakShape. Given, what grows it is enrolled and what reassigns it is released." }
   # Enrolled-with-the-center and released are ONE branch over one AT_SITE hop, sorted into stages
   # by the call's name. As two branches, each with its own AT_SITE, the engine fetched the sites

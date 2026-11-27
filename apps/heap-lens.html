@@ -21,7 +21,7 @@
       "HeapAppInstances", "HeapAppClassHolders", "HeapAppHolders", "HeapAppFields", "HeapAppPath",
       "HeapAppFieldCode", "HeapAppFieldGrowth", "HeapAppClassSource",
       "HeapFindingsWaste", "HeapFindingsDuplicateStrings", "HeapFindingsStringHolders", "HeapFindingsIdleCollections",
-      "HeapFindingsNestedCollections", "HeapFindingsThreads", "HeapFindingsBlockedThreads", "HeapFindingsStacksInYourCode",
+      "HeapFindingsNestedCollections", "HeapFindingsThreads", "HeapFindingsBlockedOrWaitingThreads", "HeapFindingsStacksInYourCode",
       "HeapFindingsThreadLocalRetention", "HeapFindingsStaticPins", "HeapFindingsListenerLeaks", "HeapFindingsIdentityKeys",
       "HeapFindingsClassLoaders", "HeapFindingsHumongous", "HeapFindingsEntanglement", "HeapFindingsFinalization",
       "HeapFindingsYourDominators"
@@ -181,7 +181,7 @@
   var JAR_VIEWS = {};
   ['HeapConcerns', 'HeapAppRetainers', 'HeapAppHistogram', 'HeapAppLeakSuspects', 'HeapAppHolders', 'HeapAppFields', 'HeapAppPath',
    'HeapAppFieldCode', 'HeapAppFieldGrowth', 'HeapAppClassSource', 'HeapAppClassHolders',
-   'HeapFindingsNestedCollections', 'HeapFindingsBlockedThreads', 'HeapFindingsStacksInYourCode', 'HeapFindingsStaticPins',
+   'HeapFindingsNestedCollections', 'HeapFindingsBlockedOrWaitingThreads', 'HeapFindingsStacksInYourCode', 'HeapFindingsStaticPins',
    'HeapFindingsIdentityKeys', 'HeapFindingsHumongous', 'HeapFindingsEntanglement', 'HeapFindingsYourDominators'
   ].forEach(function (n) { JAR_VIEWS[n] = true; });
   var lists = {};
@@ -468,7 +468,7 @@
     ['HeapFindingsListenerLeaks', 'Listener & callback leaks'], ['HeapFindingsIdentityKeys', 'Identity-hashed map keys'],
     ['HeapFindingsThreadLocalRetention', 'Retained through ThreadLocals'], ['HeapFindingsYourDominators', 'Big retainers through your code'],
     ['HeapFindingsHumongous', 'Humongous arrays (G1)'], ['HeapFindingsEntanglement', 'Entangled classes'],
-    ['HeapFindingsBlockedThreads', 'Blocked & waiting threads'], ['HeapFindingsStacksInYourCode', 'Threads in your code'],
+    ['HeapFindingsBlockedOrWaitingThreads', 'Blocked & waiting threads'], ['HeapFindingsStacksInYourCode', 'Threads in your code'],
     ['HeapFindingsThreads', 'All threads'], ['HeapFindingsClassLoaders', 'Class loaders'], ['HeapFindingsFinalization', 'Finalization']
   ];
   var findingRows = {};

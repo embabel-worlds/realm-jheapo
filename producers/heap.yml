@@ -18,11 +18,18 @@
 #   OPTIONAL MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: c.className})
 #
 # so the same realm reads any application's dump against that application's jar.
+#
+# CACHED FIVE MINUTES, empty answers too. One analysed dump never changes, so a repeated walk is
+# answered without asking jheapo again; but the Heap anchor names whichever dump jheapo is serving,
+# not a dump's identity, so the cache is a short ttl rather than immutable: a jheapo restarted on
+# another dump is read within five minutes. An empty answer (an object no field holds, a thread with
+# no frames in the application's package) is as true as a full one, so it is kept as long.
 
 # ── Whole heap, from the Heap anchor ────────────────────────────────────────────────────────────
 
 - name: heapOverview
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: getTab
   keyArgs: [heap]                  # jheapo serves one dump; an undeclared argument is not sent
   args: { tab: overview }
@@ -42,6 +49,7 @@
 
 - name: heapRetainedClasses
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: topRetained
   keyArgs: [heap]
   args: { n: 500 }
@@ -55,6 +63,7 @@
 
 - name: heapHistogramClasses
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: getTab
   keyArgs: [heap]
   args: { tab: histogram }
@@ -64,6 +73,7 @@
 
 - name: heapLeakSuspects
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: leakSuspects
   keyArgs: [heap]
   args: { n: 50 }
@@ -79,6 +89,7 @@
 
 - name: heapDominators
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: dominatorChildren
   keyArgs: [heap]
   args: { n: 100 }
@@ -96,6 +107,7 @@
 
 - name: classInstances
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: batchInstances
   keyArg: classIds
   maxKeysPerCall: 100
@@ -111,6 +123,7 @@
 
 - name: objectHolders
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: batchHolders
   keyArg: oids
   maxKeysPerCall: 100
@@ -127,6 +140,7 @@
 
 - name: objectFields
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: batchFields
   keyArg: oids
   maxKeysPerCall: 100
@@ -145,6 +159,7 @@
 
 - name: objectPaths
   kind: remote
+  cache: { kind: ttl, seconds: 300, negativeTtlSeconds: 300 }
   operation: batchPaths
   keyArg: oids
   maxKeysPerCall: 100

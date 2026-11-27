@@ -30,7 +30,7 @@ spec:
     const jar = String(lensArgs.jar || "");
     // The views that reach the application's code take `jar`; a view refuses a param it does not declare.
     const JAR_VIEWS = new Set(["HeapAppRetainers", "HeapAppClassHolders", "HeapAppFieldCode", "HeapAppFieldGrowth",
-      "HeapAppClassSource", "HeapFindingsNestedCollections", "HeapFindingsBlockedThreads", "HeapFindingsStacksInYourCode",
+      "HeapAppClassSource", "HeapFindingsNestedCollections", "HeapFindingsBlockedOrWaitingThreads", "HeapFindingsStacksInYourCode",
       "HeapFindingsStaticPins", "HeapFindingsIdentityKeys", "HeapFindingsHumongous", "HeapFindingsEntanglement",
       "HeapFindingsYourDominators"]);
     const run = async (name, params) => {
@@ -66,7 +66,7 @@ spec:
         run("HeapOverviewTotals"), run("HeapAppRetainers"), run("HeapFindingsWaste"), run("HeapFindingsIdleCollections"),
         run("HeapFindingsHumongous"), run("HeapFindingsDuplicateStrings"), run("HeapFindingsStringHolders"),
         run("HeapFindingsNestedCollections"), run("HeapFindingsStaticPins"), run("HeapFindingsListenerLeaks"),
-        run("HeapFindingsIdentityKeys"), run("HeapFindingsThreadLocalRetention"), run("HeapFindingsBlockedThreads"),
+        run("HeapFindingsIdentityKeys"), run("HeapFindingsThreadLocalRetention"), run("HeapFindingsBlockedOrWaitingThreads"),
         run("HeapFindingsStacksInYourCode"), run("HeapFindingsClassLoaders"), run("HeapFindingsFinalization"),
         run("HeapFindingsEntanglement"), run("HeapFindingsYourDominators"),
       ]);

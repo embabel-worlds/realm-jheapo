@@ -5,7 +5,7 @@
 # `{key: …}`. Given `jar: null` they answer from the heap alone, with nothing marked as the application's.
 
 - name: HeapAppRetainers
-  description: "Every class jheapo reports as retaining heap, largest first, marking the application's own (compiled in its jar)."
+  description: "Classes retaining the most heap, largest first, the app's own marked. The top 500 jheapo reports, no more; inApp needs `jar`, and is false for every row without it."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
@@ -17,7 +17,7 @@
     ORDER BY retainedBytes DESC
 
 - name: HeapAppHistogram
-  description: "The heap's top classes by shallow bytes, with instance counts, marking the application's own."
+  description: "Top classes by shallow bytes, with instance counts, the app's own marked. Only the histogram's top 30 classes; for retained bytes use HeapAppRetainers."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
@@ -29,7 +29,7 @@
     ORDER BY shallowBytes DESC
 
 - name: HeapAppLeakSuspects
-  description: "The objects retaining the most, with retained bytes, marking the application's own."
+  description: "Objects retaining the most heap, with retained bytes, the app's own marked. Only jheapo's top 50 leak suspects; inApp needs `jar`."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
@@ -40,19 +40,19 @@
     ORDER BY retainedSize DESC
 
 - name: HeapAppInstances
-  description: "Up to 25 instances of one class, by its classId."
+  description: "Up to 25 instances of one class, by its classId. A sample, not every instance: the class's instance count is on HeapAppRetainers."
   params:
-    classId: { type: string, description: "The class's id, as the retainers or histogram give it." }
+    classId: { type: string, required: true, description: "The class's id, as the retainers or histogram give it." }
   cypher: |
     MATCH (c:HeapClass {classId: $classId})-[:HAS_INSTANCE]->(o:HeapObject)
     RETURN o.oid AS oid, o.className AS className, o.shallowSize AS shallowSize
     ORDER BY oid
 
 - name: HeapAppHolders
-  description: "Who holds one object, by which field, with the field as the jar declares it."
+  description: "Who holds one object, by which field, as the jar declares that field. Direct holders only, one step up; walk further with HeapAppPath or repeated calls."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
-    oid: { type: string, description: "The object's id." }
+    oid: { type: string, required: true, description: "The object's id, decimal, exactly as an oid column of another view gives it (hex with 0x also accepted)." }
   cypher: |
     OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (o:HeapObject {oid: $oid})-[:HELD_BY]->(hd:HeapHolder)
@@ -63,10 +63,10 @@
     ORDER BY inApp DESC, className
 
 - name: HeapAppFields
-  description: "What one object's fields hold."
+  description: "What one object's fields hold: each field and the object it points at. Only fields holding an object, not primitive values; one level down."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
-    oid: { type: string, description: "The object's id." }
+    oid: { type: string, required: true, description: "The object's id, decimal, exactly as an oid column of another view gives it (hex with 0x also accepted)." }
   cypher: |
     OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (o:HeapObject {oid: $oid})-[:HAS_FIELD]->(v:HeapFieldValue)
@@ -75,10 +75,10 @@
     ORDER BY field
 
 - name: HeapAppPath
-  description: "One object's path from its GC root, numbered, each step marked when the application's jar compiled it, with its source file."
+  description: "One object's path from its GC root, numbered, with source files. Only the first chain jheapo finds, not every path; steps are marked inApp only when `jar` is given."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
-    oid: { type: string, description: "The object's id." }
+    oid: { type: string, required: true, description: "The object's id, decimal, exactly as an oid column of another view gives it (hex with 0x also accepted)." }
   cypher: |
     OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (o:HeapObject {oid: $oid})-[:PATH_TO_ROOT]->(p:HeapPathStep)
@@ -88,10 +88,10 @@
     ORDER BY step
 
 - name: HeapAppFieldCode
-  description: "One field of the application's jar: how it is declared, and every method that reads or writes it, with the code at each."
+  description: "One app field: its declaration and every method reading or writing it. Answers nothing without `jar`, and nothing for a field the jar does not declare."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
-    field: { type: string, description: "The field as Owner.field." }
+    field: { type: string, required: true, description: "The field as Owner.field, exact, e.g. com.example.Cache.entries." }
   cypher: |
     OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (j)-[:HAS_FIELD]->(f:JavaField {key: $field})
@@ -102,10 +102,10 @@
     ORDER BY access DESC, method
 
 - name: HeapAppFieldGrowth
-  description: "Where one field's container grows: each add or put made on a line that reads the field, as source writes it."
+  description: "Where one field's container grows: each add or put on a line reading it. Only put/add-like calls on the same line as a read of the field; growth through a local alias is not seen. Needs `jar`."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
-    field: { type: string, description: "The field as Owner.field." }
+    field: { type: string, required: true, description: "The field as Owner.field, exact, e.g. com.example.Cache.entries." }
   # A grow site is a put/add on a LINE that also reads the field: adding to a collection held in a
   # field is a getfield and a call on what it read, on the same line. Not the call site's receiver:
   # one call row covers every same-named call in a method, and its site is read at the first line
@@ -125,10 +125,10 @@
     ORDER BY line
 
 - name: HeapAppClassSource
-  description: "One class of the application's jar as source declares it: its file and every declaration in it, with extent and text."
+  description: "One app class's source file and every declaration in it, with text. Only classes the jar compiled and whose source is found; empty without `jar`."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
-    className: { type: string, description: "Binary class name." }
+    className: { type: string, required: true, description: "Binary class name, exact, e.g. com.example.Order or com.example.Outer$Inner." }
   cypher: |
     OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (j)-[:HAS_TYPE]->(t:JavaType {name: $className})-[:DEFINED_IN]->(s:JavaSource)
@@ -138,10 +138,10 @@
     ORDER BY fromLine
 
 - name: HeapAppClassHolders
-  description: "Who holds a class's instances (a sample of 25), grouped by holder class and field, the application's own first: the convergence points."
+  description: "Who holds a class's instances, grouped by holder class and field. Reads a sample of 25 instances, not all; the application's own holders first."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
-    classId: { type: string, description: "The class's id." }
+    classId: { type: string, required: true, description: "The class's id, exactly as HeapAppRetainers or HeapAppHistogram give it." }
   cypher: |
     OPTIONAL MATCH (j:Jar {path: CASE WHEN $jar = '' THEN null ELSE $jar END})
     MATCH (c:HeapClass {classId: $classId})-[:HAS_INSTANCE]->(o:HeapObject)-[:HELD_BY]->(hd:HeapHolder)

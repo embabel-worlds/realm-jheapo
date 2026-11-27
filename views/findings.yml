@@ -9,7 +9,7 @@
 # a plain MATCH, the engine plans it before the row exists and refuses: "Variable `c` not defined".
 
 - name: HeapFindingsWaste
-  description: "Every kind of waste jheapo measured, largest first: what it is, the bytes, how sure, the class it points at, whether that is the application's own code, and the remedy."
+  description: "Every kind of waste jheapo measured, largest first, with its remedy. Says what it is, the bytes, how sure, the class it points at and whether that is the application's own code. Whole-heap findings only, not per-object."
   cypher: |
     MATCH (h:Heap {name: 'current'})-[:HAS_WASTE]->(w:HeapWasteFinding)
     RETURN w.headline AS waste, w.bytes AS bytes, w.confidence AS confidence, w.recovery AS recovery,
@@ -17,7 +17,7 @@
     ORDER BY bytes DESC
 
 - name: HeapFindingsDuplicateStrings
-  description: "The string values held in the most wasteful numbers of copies: candidates for interning, a constant, or an enum."
+  description: "The 30 most wasteful duplicated string values, with copies and bytes. Only the top 30 by wasted bytes; who holds them is HeapFindingsStringHolders. Candidates for interning, a constant or an enum."
   cypher: |
     MATCH (h:Heap {name: 'current'})-[:DUPLICATE_STRING]->(s:HeapDuplicateString)
     RETURN s.sample AS value, s.count AS copies, s.wasted AS wastedBytes
@@ -25,7 +25,7 @@
     LIMIT 30
 
 - name: HeapFindingsStringHolders
-  description: "Who holds the heap's strings, and how few distinct values they hold: a field holding thousands of strings with a handful of values is a cache or an interning win."
+  description: "Who holds the heap's strings, and how few distinct values they hold. A field holding thousands of strings with a handful of values is a cache or interning win. Only the holders jheapo ranks, not every string."
   cypher: |
     MATCH (h:Heap {name: 'current'})-[:STRINGS_HELD_BY]->(s:HeapStringHolder)
     RETURN s.name AS heldBy, s.objects AS strings, s.distinctValues AS distinctValues, s.memoryBytes AS bytes,
@@ -34,7 +34,7 @@
     ORDER BY duplicationBytes DESC
 
 - name: HeapFindingsIdleCollections
-  description: "Collections allocated and left empty, or holding a single element: eager allocation that a lazy initialisation or a singleton collection would save."
+  description: "Collections left empty or holding one element, by class, largest first. Eager allocation that lazy initialisation or a singleton collection would save. Counts by class only, not which field holds them."
   cypher: |
     MATCH (h:Heap {name: 'current'})-[:EMPTY_COLLECTION]->(e:HeapIdleCollection)
     WITH h, collect(e) AS empty
@@ -46,7 +46,7 @@
     ORDER BY bytes DESC
 
 - name: HeapFindingsNestedCollections
-  description: "Collections of collections and the fields that hold them, statically held first, with how the application declares the field and the code that assigns it - the shape of most unbounded caches."
+  description: "Collections of collections and the fields holding them, static first. With how the application declares the field - the shape of most unbounded caches. declaredAs and yourCode need `jar`."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
@@ -58,14 +58,14 @@
     ORDER BY static DESC, yourCode DESC, innerCollections DESC
 
 - name: HeapFindingsThreads
-  description: "Every thread by state, with stack depth and the objects its frames hold: what the application was doing when the dump was taken."
+  description: "Every thread by state, with stack depth and locals held. What the application was doing when the dump was taken; not the frames themselves (see HeapFindingsStacksInYourCode)."
   cypher: |
     MATCH (h:Heap {name: 'current'})-[:HAS_THREAD]->(t:HeapThread)
     RETURN t.state AS state, t.name AS thread, t.daemon AS daemon, t.frameCount AS frames, t.localCount AS locals
     ORDER BY state, frames DESC
 
-- name: HeapFindingsBlockedThreads
-  description: "Threads BLOCKED on a monitor or WAITING, each with the frame it is stuck in and that line of source when the application's jar compiled it. Empty is good news."
+- name: HeapFindingsBlockedOrWaitingThreads
+  description: "Threads BLOCKED on a monitor or WAITING, with the frame each is stuck in. That line of source too, when the application's jar compiled it. Not TIMED_WAITING threads (sleeps, timed waits). Empty is good news."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
@@ -79,7 +79,7 @@
     ORDER BY state, thread
 
 - name: HeapFindingsStacksInYourCode
-  description: "Where each thread was in the application's own code: every frame of a class the application's jar compiled, with the line it was executing in context. A stack trace you can read as source."
+  description: "Each thread's frames in the application's own code, with the source line. Only frames of classes the jar compiled, so empty without `jar`. A stack trace you can read as source."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
@@ -94,7 +94,7 @@
     ORDER BY thread, frame
 
 - name: HeapFindingsThreadLocalRetention
-  description: "Large retainers whose path from a GC root runs through a ThreadLocal: memory a thread keeps alive per thread, which a pooled thread never lets go of."
+  description: "Large retainers whose GC-root path runs through a ThreadLocal. Memory a pooled thread never lets go of. Only the top 100 dominators are checked, each by its first path."
   cypher: |
     MATCH (h:Heap {name: 'current'})-[:DOMINATES]->(o:HeapObject)-[:PATH_TO_ROOT]->(p:HeapPathStep)
     WHERE p.className = 'java.lang.ThreadLocal$ThreadLocalMap$Entry'
@@ -102,7 +102,7 @@
     ORDER BY retainedBytes DESC
 
 - name: HeapFindingsStaticPins
-  description: "Large retainers held directly by a static field: memory that lives as long as its class loader. Shows the field, how it is declared, and whether the application owns it."
+  description: "Large retainers held directly by a static field of the application. Memory that lives as long as its class loader. Only the top 100 dominators, and only fields the jar declares, so empty without `jar`."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
@@ -114,7 +114,7 @@
     ORDER BY retainedBytes DESC
 
 - name: HeapFindingsListenerLeaks
-  description: "Large retainers held through a field whose name says listener, callback, observer, handler or subscriber: the registration that is never removed, the most common leak in event-driven code."
+  description: "Large retainers held through a listener, callback or handler field. A field whose name says listener, callback, observer, handler, subscriber or watcher: the registration never removed. Only the top 100 dominators, direct holders only."
   cypher: |
     MATCH (h:Heap {name: 'current'})-[:DOMINATES]->(o:HeapObject)-[:HELD_BY]->(hd:HeapHolder)
     WHERE any(t IN hd.through WHERE toLower(t) =~ '.*(listener|callback|observer|handler|subscriber|watcher).*')
@@ -122,7 +122,7 @@
     ORDER BY retainedBytes DESC
 
 - name: HeapFindingsIdentityKeys
-  description: "Objects of the application's classes used as hash-map keys while their class never overrides hashCode: equal-looking keys are different entries, and a key not kept can never be found again."
+  description: "App objects used as hash-map keys whose class never overrides hashCode. Equal-looking keys are different entries, and a key not kept can never be found again. Only classes among the histogram's top 30, a sample of 25 instances each; needs `jar`."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
@@ -136,7 +136,7 @@
     ORDER BY keysInSample DESC
 
 - name: HeapFindingsClassLoaders
-  description: "Class loaders by type and state, unreachable ones first: an unreachable loader still holding classes is the redeploy leak that ends in Metaspace exhaustion."
+  description: "Class loaders by type and state, unreachable ones first. An unreachable loader still holding classes is the redeploy leak that ends in Metaspace exhaustion. Groups only, not individual loaders."
   cypher: |
     MATCH (h:Heap {name: 'current'})-[:HAS_CLASS_LOADERS]->(g:HeapClassLoaderGroup)
     RETURN g.type AS loader, g.state AS state, g.instances AS loaders, g.unreachable AS unreachable,
@@ -144,7 +144,7 @@
     ORDER BY unreachable DESC, classes DESC
 
 - name: HeapFindingsHumongous
-  description: "Arrays big enough to be G1 humongous objects, by the class holding them: the bytes they need against the region footprint they take, and whether the application's code holds them."
+  description: "G1 humongous arrays by the class holding them, most waste first. The bytes they need against the region footprint they take, and whether the application's code holds them (yourCode needs `jar`)."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
@@ -156,7 +156,7 @@
     ORDER BY wasted DESC
 
 - name: HeapFindingsEntanglement
-  description: "Classes whose instances keep each other alive - reachable only through one another - and the bytes held that way: what one change would release together."
+  description: "Classes whose instances keep each other alive, with the bytes held. Reachable only through one another: what one change would release together. Only the classes jheapo ranks; yourCode needs `jar`."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
@@ -167,14 +167,14 @@
     ORDER BY bytes DESC
 
 - name: HeapFindingsFinalization
-  description: "The finalization backlog: objects waiting for a finalizer, and finalizers and cleaners registered. A pending count above zero means the finalizer thread is behind - memory waits on it."
+  description: "The finalization backlog: objects pending, finalizers and cleaners. A pending count above zero means the finalizer thread is behind - memory waits on it. Totals only, not which classes."
   cypher: |
     MATCH (h:Heap {name: 'current'})-[:HAS_FINALIZATION]->(f:HeapFinalization)
     RETURN f.pending AS pending, f.registered AS registered, f.finalized AS finalized, f.finalizersRegistered AS finalizers,
            f.cleanupActions AS cleaners
 
 - name: HeapFindingsYourDominators
-  description: "The largest retainers whose path from a GC root passes through the application's own code: what your code is responsible for keeping alive, and the first of its classes on the way."
+  description: "Largest retainers whose GC-root path passes through the app's code. What your code keeps alive, and the first of its classes on the way. Only the top 100 dominators, each by its first path; empty without `jar`."
   params:
     jar: { type: string, default: "", description: "The application's jar as realm-java-code reads it, e.g. jars/app.jar under the world's data/. Empty: the heap alone, nothing marked as the application's." }
   cypher: |
